@@ -1,5 +1,5 @@
 // ==========================================================
-// LMX Studio — AI Image Designer Backend (FINAL DEPLOY BUILD)
+// LMX Studio — AI Image Designer Backend (FINAL DEPLOY BUILD — PATCHED)
 // ----------------------------------------------------------
 // • POST /api/generate — Optimized OpenAI Image API (auto-retry)
 // • POST /api/submit   — Sends generated image + form via Resend
@@ -65,7 +65,7 @@ app.post("/api/generate", async (req, res) => {
           model: "gpt-image-1",
           prompt,
           size,
-          quality: "standard",
+          quality: "high", // ✅ replaced 'standard'
         },
         { signal: controller.signal }
       );
@@ -78,7 +78,7 @@ app.post("/api/generate", async (req, res) => {
         model: "gpt-image-1",
         prompt,
         size,
-        quality: "standard",
+        quality: "high", // ✅ replaced 'standard'
       });
     }
 
