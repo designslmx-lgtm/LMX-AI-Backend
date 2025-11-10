@@ -1,12 +1,11 @@
-// LMX Studio — AI Image Designer backend
+// LMX Studio — AI Image Designer backend (Fixed + Updated)
 //
-// This Express server exposes two endpoints:
-//   • POST /generate — calls the OpenAI Image API to create an image from a text prompt
-//   • POST /submit   — emails the generated artwork and order details via Resend
+// Express server exposes:
+//  • POST /generate — calls OpenAI Image API to create an image from a text prompt
+//  • POST /submit   — emails the generated artwork and order details via Resend
 //
-// All secrets (OpenAI, Resend, Render, Submit address) are read from environment
-// variables.  DO NOT hard‑code your API keys here.  Use the placeholders below in
-// your .env file and replace them with your real keys when you’re ready to go live.
+// All secrets (OpenAI, Resend, Render, Submit address) are stored in environment variables.
+// DO NOT hard-code your API keys here.
 
 import express from "express";
 import cors from "cors";
@@ -20,39 +19,36 @@ const upload = multer({ limits: { fileSize: 25 * 1024 * 1024 } });
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Allow only your domains to call these endpoints.  Edit ALLOWED_ORIGIN in .env
+// Allow only your site(s) to access
 app.use(
   cors({
     origin: process.env.ALLOWED_ORIGIN?.split(",") || "*",
   })
 );
 
-// Initialise API clients using environment variables.  If the keys are missing,
-// the clients will be initialised with empty strings, and requests will fail.
+// Initialize clients
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
 const resend = new Resend(process.env.RESEND_API_KEY || "");
-
-// Default email recipient – set SUBMIT_TO in your environment to override
 const SUBMIT_TO = process.env.SUBMIT_TO || "YOUR_EMAIL_HERE";
 
 /**
  * POST /generate
- *
- * Expects a JSON body: { prompt: "<your text prompt>" }
- * Returns: { base64: "data:image/png;base64,<encoded image>" }
+ * Body: { prompt: "<your text>" }
  */
 app.post("/generate", async (req, res) => {
   try {
     const prompt = (req.body?.prompt || "").trim();
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
 
-    const img = await openai.images.generate({
+    // ✅ FIXED: Removed invalid `response_format`
+    const result = await openai.images.generate({
       model: "gpt-image-1",
       prompt,
-      size: "2048x2048",
-      response_format: "b64_json",
+      size: "1024x1024",
     });
-    const b64 = img.data?.[0]?.b64_json;
+
+    // Extract base64 image data
+    const b64 = result.data?.[0]?.b64_json;
     if (!b64) return res.status(500).json({ error: "No image returned" });
 
     return res.json({ base64: `data:image/png;base64,${b64}` });
@@ -63,38 +59,45 @@ app.post("/generate", async (req, res) => {
 });
 
 /**
- * POST /submit
- *
- * Accepts form fields (multipart/form-data) including:
- *   name, email, product, qty, size, color, notes
- *   generatedImage (base64 string or URL)
- *   upload (optional file upload)
- *
- * Sends an email with order details and attachments via Resend.
+ * POST /submit — sends email with order + attachments via Resend
  */
 app.post("/submit", upload.single("upload"), async (req, res) => {
   try {
     const f = req.body || {};
     const attachments = [];
 
-    // Attach generated image, either as base64 string or remote URL
+    // Attach generated image
     const gen = f.generatedImage || "";
     if (gen.startsWith("data:image/")) {
       const base64 = gen.split(",")[1];
-      if (base64) attachments.push({ filename: "generated.png", content: base64, encoding: "base64" });
+      if (base64)
+        attachments.push({
+          filename: "generated.png",
+          content: base64,
+          encoding: "base64",
+        });
     } else if (/^https?:/.test(gen)) {
       const r = await fetch(gen);
       if (r.ok) {
         const buf = Buffer.from(await r.arrayBuffer());
-        attachments.push({ filename: "generated.png", content: buf.toString("base64"), encoding: "base64" });
+        attachments.push({
+          filename: "generated.png",
+          content: buf.toString("base64"),
+          encoding: "base64",
+        });
       }
     }
 
-    // Attach uploaded file, if provided
+    // Attach uploaded file, if present
     if (req.file) {
-      attachments.push({ filename: req.file.originalname, content: req.file.buffer.toString("base64"), encoding: "base64" });
+      attachments.push({
+        filename: req.file.originalname,
+        content: req.file.buffer.toString("base64"),
+        encoding: "base64",
+      });
     }
 
+    // Email HTML body
     const html = `
       <h2>New LMX AI Order</h2>
       <p><b>Name:</b> ${f.name || ""}</p>
@@ -121,6 +124,6 @@ app.post("/submit", upload.single("upload"), async (req, res) => {
   }
 });
 
-// Launch the server
+// Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`LMX backend listening on ${PORT}`));
+app.listen(PORT, () => console.log(`✅ LMX backend listening on ${PORT}`));
