@@ -1,11 +1,12 @@
-// LMX Studio — AI Image Designer backend (FINAL FIXED)
-// ----------------------------------------------------
-// Handles:
-//   • POST /api/generate — calls OpenAI Image API
-//   • POST /api/submit   — sends artwork via Resend
-//
-// Secrets stored as environment variables.
-// ----------------------------------------------------
+// ==========================================================
+// LMX Studio — AI Image Designer Backend (FINAL DEPLOY BUILD)
+// ----------------------------------------------------------
+// • POST /api/generate — Calls OpenAI Image API
+// • POST /api/submit   — Sends generated image + form via Resend
+// ----------------------------------------------------------
+// All secrets stored in environment variables.
+// Author: Lawrence Michael (LMX Studio)
+// ==========================================================
 
 import express from "express";
 import cors from "cors";
@@ -14,36 +15,44 @@ import fetch from "node-fetch";
 import { Resend } from "resend";
 import OpenAI from "openai";
 
+// ===== INIT =====
 const app = express();
 const upload = multer({ limits: { fileSize: 25 * 1024 * 1024 } });
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// ===== CORS (allow only your site) =====
+// ===== CORS CONFIG =====
 app.use(
   cors({
-    origin: process.env.ALLOWED_ORIGIN?.split(",") || "https://lmxstudio.com",
+    origin:
+      process.env.ALLOWED_ORIGIN?.split(",") || [
+        "https://lmxstudio.com",
+        "https://www.lmxstudio.com",
+      ],
     methods: ["POST", "GET", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
-// ===== Initialize clients =====
+// ===== API CLIENTS =====
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
 const resend = new Resend(process.env.RESEND_API_KEY || "");
-const SUBMIT_TO = process.env.SUBMIT_TO || "designslmx@gmail.com";
+const SUBMIT_TO = process.env.SUBMIT_TO || "lmxcustomize@gmail.com";
 
-// ====== TEST ROUTE ======
+// ===== HEALTH CHECK =====
 app.get("/", (req, res) => {
-  res.send("✅ LMX AI Backend is running!");
+  res.send("✅ LMX AI Backend is running and connected successfully!");
 });
 
-// ====== GENERATE IMAGE ======
+// ===== IMAGE GENERATION =====
 app.post("/api/generate", async (req, res) => {
   try {
     const prompt = (req.body?.prompt || "").trim();
-    if (!prompt) return res.status(400).json({ error: "Missing prompt" });
+    if (!prompt)
+      return res.status(400).json({ error: "Missing prompt for generation." });
+
+    console.log("🧠 Generating image for prompt:", prompt);
 
     const result = await openai.images.generate({
       model: "gpt-image-1",
@@ -52,22 +61,23 @@ app.post("/api/generate", async (req, res) => {
     });
 
     const b64 = result.data?.[0]?.b64_json;
-    if (!b64) return res.status(500).json({ error: "No image returned" });
+    if (!b64) return res.status(500).json({ error: "No image returned." });
 
+    console.log("✅ Image generated successfully!");
     res.json({ base64: `data:image/png;base64,${b64}` });
   } catch (err) {
     console.error("❌ GENERATE_ERR:", err);
-    res.status(500).json({ error: "Generator unavailable" });
+    res.status(500).json({ error: "Image generator unavailable." });
   }
 });
 
-// ====== SUBMIT ORDER ======
+// ===== ORDER SUBMISSION =====
 app.post("/api/submit", upload.single("upload"), async (req, res) => {
   try {
     const f = req.body || {};
     const attachments = [];
 
-    // Attach generated image
+    // ---- Generated image ----
     const gen = f.generatedImage || "";
     if (gen.startsWith("data:image/")) {
       const base64 = gen.split(",")[1];
@@ -89,7 +99,7 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
       }
     }
 
-    // Attach uploaded file
+    // ---- Uploaded file ----
     if (req.file) {
       attachments.push({
         filename: req.file.originalname,
@@ -98,16 +108,16 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
       });
     }
 
-    // Email body
+    // ---- Email body ----
     const html = `
-      <h2>New LMX AI Order</h2>
-      <p><b>Name:</b> ${f.name || ""}</p>
-      <p><b>Email:</b> ${f.email || ""}</p>
-      <p><b>Product:</b> ${f.product || ""}</p>
-      <p><b>Qty:</b> ${f.qty || ""}</p>
-      <p><b>Size:</b> ${f.size || ""}</p>
-      <p><b>Color:</b> ${f.color || ""}</p>
-      <p><b>Notes:</b> ${f.notes || ""}</p>
+      <h2>🧩 New LMX AI Designer Submission</h2>
+      <p><b>Name:</b> ${f.name || "N/A"}</p>
+      <p><b>Email:</b> ${f.email || "N/A"}</p>
+      <p><b>Product:</b> ${f.product || "N/A"}</p>
+      <p><b>Qty:</b> ${f.qty || "N/A"}</p>
+      <p><b>Size:</b> ${f.size || "N/A"}</p>
+      <p><b>Color:</b> ${f.color || "N/A"}</p>
+      <p><b>Notes:</b> ${f.notes || "None"}</p>
     `;
 
     await resend.emails.send({
@@ -118,13 +128,16 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
       attachments,
     });
 
+    console.log("📤 Email sent successfully to:", SUBMIT_TO);
     res.json({ ok: true });
   } catch (err) {
     console.error("❌ SUBMIT_ERR:", err);
-    res.status(500).json({ error: "Submit failed" });
+    res.status(500).json({ error: "Submit failed. Please retry." });
   }
 });
 
-// ====== START SERVER ======
+// ===== START SERVER =====
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`✅ LMX backend listening on ${PORT}`));
+app.listen(PORT, () =>
+  console.log(`✅ LMX backend live on port ${PORT} — ready for connections.`)
+);
