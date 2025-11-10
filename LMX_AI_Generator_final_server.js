@@ -1,7 +1,7 @@
 // ==========================================================
 // LMX Studio — AI Image Designer Backend (FINAL DEPLOY BUILD)
 // ----------------------------------------------------------
-// • POST /api/generate — Calls OpenAI Image API
+// • POST /api/generate — Optimized OpenAI Image API (auto-retry)
 // • POST /api/submit   — Sends generated image + form via Resend
 // ----------------------------------------------------------
 // All secrets stored in environment variables.
@@ -45,28 +45,55 @@ app.get("/", (req, res) => {
   res.send("✅ LMX AI Backend is running and connected successfully!");
 });
 
-// ===== IMAGE GENERATION =====
+// ===== IMAGE GENERATION (Smaller & Auto-Retry Version) =====
 app.post("/api/generate", async (req, res) => {
   try {
     const prompt = (req.body?.prompt || "").trim();
     if (!prompt)
       return res.status(400).json({ error: "Missing prompt for generation." });
 
-    console.log("🧠 Generating image for prompt:", prompt);
+    console.log("🧠 Generating optimized image for prompt:", prompt);
 
-    const result = await openai.images.generate({
-      model: "gpt-image-1",
-      prompt,
-      size: "1024x1024",
-    });
+    // --- First attempt: 512x512 (fast & sharp)
+    let size = "512x512";
+    let result;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 25000);
+      result = await openai.images.generate(
+        {
+          model: "gpt-image-1",
+          prompt,
+          size,
+          quality: "standard",
+        },
+        { signal: controller.signal }
+      );
+      clearTimeout(timeout);
+    } catch (err) {
+      // --- Retry once at 256x256 if first fails or times out
+      console.warn("⚠️ Retrying at 256x256 due to timeout/error...");
+      size = "256x256";
+      result = await openai.images.generate({
+        model: "gpt-image-1",
+        prompt,
+        size,
+        quality: "standard",
+      });
+    }
 
-    const b64 = result.data?.[0]?.b64_json;
+    const b64 = result?.data?.[0]?.b64_json;
     if (!b64) return res.status(500).json({ error: "No image returned." });
 
-    console.log("✅ Image generated successfully!");
+    console.log(`✅ Image generated successfully (${size})`);
     res.json({ base64: `data:image/png;base64,${b64}` });
   } catch (err) {
-    console.error("❌ GENERATE_ERR:", err);
+    console.error("❌ GENERATE_ERR:", err.name, err.message);
+    if (err.name === "AbortError") {
+      return res
+        .status(504)
+        .json({ error: "Timed out — try a shorter or simpler prompt." });
+    }
     res.status(500).json({ error: "Image generator unavailable." });
   }
 });
