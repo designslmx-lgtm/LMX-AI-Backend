@@ -1,11 +1,11 @@
-// LMX Studio — AI Image Designer backend (Fixed + Updated)
+// LMX Studio — AI Image Designer backend (FINAL FIXED)
+// ----------------------------------------------------
+// Handles:
+//   • POST /api/generate — calls OpenAI Image API
+//   • POST /api/submit   — sends artwork via Resend
 //
-// Express server exposes:
-//  • POST /generate — calls OpenAI Image API to create an image from a text prompt
-//  • POST /submit   — emails the generated artwork and order details via Resend
-//
-// All secrets (OpenAI, Resend, Render, Submit address) are stored in environment variables.
-// DO NOT hard-code your API keys here.
+// Secrets stored as environment variables.
+// ----------------------------------------------------
 
 import express from "express";
 import cors from "cors";
@@ -16,52 +16,53 @@ import OpenAI from "openai";
 
 const app = express();
 const upload = multer({ limits: { fileSize: 25 * 1024 * 1024 } });
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Allow only your site(s) to access
+// ===== CORS (allow only your site) =====
 app.use(
   cors({
-    origin: process.env.ALLOWED_ORIGIN?.split(",") || "*",
+    origin: process.env.ALLOWED_ORIGIN?.split(",") || "https://lmxstudio.com",
+    methods: ["POST", "GET", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
-// Initialize clients
+// ===== Initialize clients =====
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
 const resend = new Resend(process.env.RESEND_API_KEY || "");
-const SUBMIT_TO = process.env.SUBMIT_TO || "YOUR_EMAIL_HERE";
+const SUBMIT_TO = process.env.SUBMIT_TO || "designslmx@gmail.com";
 
-/**
- * POST /generate
- * Body: { prompt: "<your text>" }
- */
-app.post("/generate", async (req, res) => {
+// ====== TEST ROUTE ======
+app.get("/", (req, res) => {
+  res.send("✅ LMX AI Backend is running!");
+});
+
+// ====== GENERATE IMAGE ======
+app.post("/api/generate", async (req, res) => {
   try {
     const prompt = (req.body?.prompt || "").trim();
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
 
-    // ✅ FIXED: Removed invalid `response_format`
     const result = await openai.images.generate({
       model: "gpt-image-1",
       prompt,
       size: "1024x1024",
     });
 
-    // Extract base64 image data
     const b64 = result.data?.[0]?.b64_json;
     if (!b64) return res.status(500).json({ error: "No image returned" });
 
-    return res.json({ base64: `data:image/png;base64,${b64}` });
+    res.json({ base64: `data:image/png;base64,${b64}` });
   } catch (err) {
-    console.error("GENERATE_ERR:", err);
+    console.error("❌ GENERATE_ERR:", err);
     res.status(500).json({ error: "Generator unavailable" });
   }
 });
 
-/**
- * POST /submit — sends email with order + attachments via Resend
- */
-app.post("/submit", upload.single("upload"), async (req, res) => {
+// ====== SUBMIT ORDER ======
+app.post("/api/submit", upload.single("upload"), async (req, res) => {
   try {
     const f = req.body || {};
     const attachments = [];
@@ -88,7 +89,7 @@ app.post("/submit", upload.single("upload"), async (req, res) => {
       }
     }
 
-    // Attach uploaded file, if present
+    // Attach uploaded file
     if (req.file) {
       attachments.push({
         filename: req.file.originalname,
@@ -97,7 +98,7 @@ app.post("/submit", upload.single("upload"), async (req, res) => {
       });
     }
 
-    // Email HTML body
+    // Email body
     const html = `
       <h2>New LMX AI Order</h2>
       <p><b>Name:</b> ${f.name || ""}</p>
@@ -119,11 +120,11 @@ app.post("/submit", upload.single("upload"), async (req, res) => {
 
     res.json({ ok: true });
   } catch (err) {
-    console.error("SUBMIT_ERR:", err);
+    console.error("❌ SUBMIT_ERR:", err);
     res.status(500).json({ error: "Submit failed" });
   }
 });
 
-// Start server
-const PORT = process.env.PORT || 3000;
+// ====== START SERVER ======
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`✅ LMX backend listening on ${PORT}`));
