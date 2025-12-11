@@ -1,23 +1,85 @@
+//LMX-AI Backend (Final Working Version)
+
 // ==========================================================
-// LMX Studio — AI Image Designer Backend (FINAL DEPLOY BUILD)
 // LMX Studio — AI Image Designer Backend (FINAL DEPLOY BUILD — PATCHED)
 // ----------------------------------------------------------
 // • POST /api/generate — Optimized OpenAI Image API (auto-retry)
 // • POST /api/submit   — Sends generated image + form via Resend
-@@ -65,7 +65,7 @@
+// ----------------------------------------------------------
+// All secrets stored in environment variables.
+// Author: Lawrence Michael (LMX Studio)
+// ==========================================================
+
+import express from "express";
+import cors from "cors";
+import multer from "multer";
+import fetch from "node-fetch";
+import { Resend } from "resend";
+import OpenAI from "openai";
+
+// ===== INIT =====
+const app = express();
+const upload = multer({ limits: { fileSize: 25 * 1024 * 1024 } });
+
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true }));
+
+// ===== CORS CONFIG =====
+app.use(
+  cors({
+    origin:
+      process.env.ALLOWED_ORIGIN?.split(",") || [
+        "https://lmxstudio.com",
+        "https://www.lmxstudio.com",
+      ],
+    methods: ["POST", "GET", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+// ===== API CLIENTS =====
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
+const resend = new Resend(process.env.RESEND_API_KEY || "");
+const SUBMIT_TO = process.env.SUBMIT_TO || "lmxcustomize@gmail.com";
+
+// ===== HEALTH CHECK =====
+app.get("/", (req, res) => {
+  res.send("✅ LMX AI Backend is running and connected successfully!");
+});
+
+// ===== IMAGE GENERATION (Smaller & Auto-Retry Version) =====
+app.post("/api/generate", async (req, res) => {
+  try {
+    const prompt = (req.body?.prompt || "").trim();
+    if (!prompt)
+      return res.status(400).json({ error: "Missing prompt for generation." });
+
+    console.log("🧠 Generating optimized image for prompt:", prompt);
+
+    // --- First attempt: 512x512 (fast & sharp)
+    let size = "512x512";
+    let result;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 25000);
+      result = await openai.images.generate(
+        {
           model: "gpt-image-1",
           prompt,
           size,
-          quality: "standard",
           quality: "high", // ✅ replaced 'standard'
         },
         { signal: controller.signal }
       );
-@@ -78,92 +78,92 @@
+      clearTimeout(timeout);
+    } catch (err) {
+      // --- Retry once at 256x256 if first fails or times out
+      console.warn("⚠️ Retrying at 256x256 due to timeout/error...");
+      size = "256x256";
+      result = await openai.images.generate({
         model: "gpt-image-1",
         prompt,
         size,
-        quality: "standard",
         quality: "high", // ✅ replaced 'standard'
       });
     }
@@ -107,3 +169,4 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () =>
   console.log(`✅ LMX backend live on port ${PORT} — ready for connections.`)
+);
