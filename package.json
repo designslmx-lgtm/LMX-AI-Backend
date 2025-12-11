@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Backend server for LMX AI Generator",
   "main": "LMX_AI_Generator_final_server.js",
+  "type": "module",
   "scripts": {
     "start": "node LMX_AI_Generator_final_server.js"
   },
@@ -13,7 +14,7 @@
     "multer": "^1.4.5-lts.1",
     "node-fetch": "^3.3.2",
     "resend": "^2.0.0",
-    "openai": "^4.0.0"
+    "openai": "^4.52.0"
   },
   "engines": {
     "node": ">=18.x"
