@@ -1,7 +1,7 @@
 // ==========================================================
-// LMX Studio — AI Image Designer Backend (FINAL DEPLOY BUILD — PATCHED)
+// LMX Studio — AI Image Designer Backend (FINAL FIXED BUILD)
 // ----------------------------------------------------------
-// • POST /api/generate — Optimized OpenAI Image API (auto-retry)
+// • POST /api/generate — OpenAI Image API (correct sizes, auto-retry)
 // • POST /api/submit   — Sends generated image + form via Resend
 // ----------------------------------------------------------
 // All secrets stored in environment variables.
@@ -42,63 +42,65 @@ const SUBMIT_TO = process.env.SUBMIT_TO || "lmxcustomize@gmail.com";
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) => {
-  res.send("✅ LMX AI Backend is running and connected successfully!");
+  res.send("✅ LMX AI Backend is live and connected.");
 });
 
-// ===== IMAGE GENERATION (Smaller & Auto-Retry Version) =====
+// ==========================================================
+// ===== IMAGE GENERATION (CORRECTED SIZE + AUTO-RETRY) =====
+// ==========================================================
 app.post("/api/generate", async (req, res) => {
   try {
     const prompt = (req.body?.prompt || "").trim();
     if (!prompt)
       return res.status(400).json({ error: "Missing prompt for generation." });
 
-    console.log("🧠 Generating optimized image for prompt:", prompt);
+    console.log("🧠 Generating image for prompt:", prompt);
 
-    // --- First attempt: 512x512 (fast & sharp)
-    let size = "512x512";
+    // --- Always use valid sizes supported by OpenAI ---
+    // Supported: "1024x1024", "2048x2048", "auto"
+    let size = "1024x1024";
     let result;
+
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 25000);
+
       result = await openai.images.generate(
         {
           model: "gpt-image-1",
           prompt,
           size,
-          quality: "high", // ✅ replaced 'standard'
+          quality: "high",
         },
         { signal: controller.signal }
       );
+
       clearTimeout(timeout);
     } catch (err) {
-      // --- Retry once at 256x256 if first fails or times out
-      console.warn("⚠️ Retrying at 256x256 due to timeout/error...");
-      size = "256x256";
+      console.warn("⚠️ First attempt failed. Retrying with size=auto…");
+
       result = await openai.images.generate({
         model: "gpt-image-1",
         prompt,
-        size,
-        quality: "high", // ✅ replaced 'standard'
+        size: "auto",
+        quality: "high",
       });
     }
 
     const b64 = result?.data?.[0]?.b64_json;
     if (!b64) return res.status(500).json({ error: "No image returned." });
 
-    console.log(`✅ Image generated successfully (${size})`);
+    console.log("✅ Image generated successfully.");
     res.json({ base64: `data:image/png;base64,${b64}` });
   } catch (err) {
-    console.error("❌ GENERATE_ERR:", err.name, err.message);
-    if (err.name === "AbortError") {
-      return res
-        .status(504)
-        .json({ error: "Timed out — try a shorter or simpler prompt." });
-    }
+    console.error("❌ GENERATE_ERR:", err);
     res.status(500).json({ error: "Image generator unavailable." });
   }
 });
 
-// ===== ORDER SUBMISSION =====
+// ==========================================================
+// ===== ORDER SUBMISSION (UNCHANGED) =======================
+// ==========================================================
 app.post("/api/submit", upload.single("upload"), async (req, res) => {
   try {
     const f = req.body || {};
@@ -126,7 +128,7 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
       }
     }
 
-    // ---- Uploaded file ----
+    // ---- Uploaded physical file ----
     if (req.file) {
       attachments.push({
         filename: req.file.originalname,
@@ -135,7 +137,7 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
       });
     }
 
-    // ---- Email body ----
+    // ---- Email contents ----
     const html = `
       <h2>🧩 New LMX AI Designer Submission</h2>
       <p><b>Name:</b> ${f.name || "N/A"}</p>
@@ -155,7 +157,7 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
       attachments,
     });
 
-    console.log("📤 Email sent successfully to:", SUBMIT_TO);
+    console.log("📤 Submission email sent to:", SUBMIT_TO);
     res.json({ ok: true });
   } catch (err) {
     console.error("❌ SUBMIT_ERR:", err);
@@ -166,5 +168,5 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
 // ===== START SERVER =====
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () =>
-  console.log(`✅ LMX backend live on port ${PORT} — ready for connections.`)
+  console.log(`✅ LMX Backend running on port ${PORT}`)
 );
