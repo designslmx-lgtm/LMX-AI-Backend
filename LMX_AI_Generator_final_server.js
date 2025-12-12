@@ -38,7 +38,9 @@ app.use(
 // ===== API CLIENTS =====
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
 const resend = new Resend(process.env.RESEND_API_KEY || "");
-const SUBMIT_TO = process.env.SUBMIT_TO || "lmxcustomize@gmail.com";
+
+// 🔥 FIXED — NOW USING THE CORRECT EMAIL
+const SUBMIT_TO = process.env.SUBMIT_TO || "designslmx@gmail.com";
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) => {
@@ -65,20 +67,19 @@ app.post("/api/generate", async (req, res) => {
           model: "gpt-image-1",
           prompt,
           size,
-          quality: "high", // ✅ replaced 'standard'
+          quality: "high",
         },
         { signal: controller.signal }
       );
       clearTimeout(timeout);
     } catch (err) {
-      // --- Retry once at 256x256 if first fails or times out
       console.warn("⚠️ Retrying at 256x256 due to timeout/error...");
       size = "256x256";
       result = await openai.images.generate({
         model: "gpt-image-1",
         prompt,
         size,
-        quality: "high", // ✅ replaced 'standard'
+        quality: "high",
       });
     }
 
@@ -112,7 +113,7 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
         attachments.push({
           filename: "generated.png",
           content: base64,
-          encoding: "base64",
+          encoding: "basebase64",
         });
     } else if (/^https?:/.test(gen)) {
       const r = await fetch(gen);
