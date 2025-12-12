@@ -113,7 +113,7 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
         attachments.push({
           filename: "generated.png",
           content: base64,
-          encoding: "basebase64",
+          encoding: "base64",
         });
     } else if (/^https?:/.test(gen)) {
       const r = await fetch(gen);
