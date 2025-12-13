@@ -1,7 +1,7 @@
 // ==========================================================
-// LMX Studio — AI Image Designer Backend (FINAL WORKING BUILD)
+// LMX Studio — AI Image Designer Backend (DEBUGGED BUILD)
 // ----------------------------------------------------------
-// • POST /api/generate — OpenAI Image API (updated for SDK v4)
+// • POST /api/generate — OpenAI Image API (instrumented)
 // • POST /api/submit   — Sends generated image + form via Resend
 // ----------------------------------------------------------
 // All secrets stored in environment variables.
@@ -46,45 +46,47 @@ app.get("/", (req, res) => {
 });
 
 // ==========================================================
-// ===== IMAGE GENERATION (FIXED — INVALID PARAM REMOVED) ====
+// ===== IMAGE GENERATION (TRUTH MODE — NO GUESSING) =========
 // ==========================================================
 app.post("/api/generate", async (req, res) => {
   try {
     const prompt = (req.body?.prompt || "").trim();
-    if (!prompt)
+    if (!prompt) {
       return res.status(400).json({ error: "Missing prompt." });
+    }
 
-    console.log("🧠 Generating image:", prompt);
+    console.log("🧠 PROMPT RECEIVED:", prompt);
 
-    let result;
+    const result = await openai.images.generate({
+      model: "gpt-image-1",
+      prompt: prompt,
+      size: "1024x1024",
+      response_format: "b64_json",
+    });
 
-    // FIRST ATTEMPT — Standard 1024x1024
-    try {
-      result = await openai.images.generate({
-        model: "gpt-image-1",
-        prompt: prompt,
-        size: "1024x1024",
-        quality: "high",
-      });
-    } catch (err) {
-      console.warn("⚠️ First attempt failed → retrying w/ auto size");
+    console.log("🧪 RAW RESULT:", result);
+    console.log("🧪 RESULT.DATA:", result?.data);
 
-      result = await openai.images.generate({
-        model: "gpt-image-1",
-        prompt: prompt,
-        size: "auto",
-        quality: "high",
+    if (!result || !result.data || !result.data[0]?.b64_json) {
+      console.error("❌ NO IMAGE RETURNED FROM OPENAI");
+      return res.status(500).json({
+        error: "OpenAI returned no image",
+        debug: result,
       });
     }
 
-    const b64 = result?.data?.[0]?.b64_json;
-    if (!b64) return res.status(500).json({ error: "No image returned." });
+    const image = `data:image/png;base64,${result.data[0].b64_json}`;
 
-    console.log("✅ Image generated successfully");
-    res.json({ base64: `data:image/png;base64,${b64}` });
+    console.log("✅ IMAGE GENERATED — RETURNING TO FRONTEND");
+    res.status(200).json({ image });
+
   } catch (err) {
-    console.error("❌ GENERATE_ERR:", err);
-    res.status(500).json({ error: "Image generator unavailable." });
+    console.error("❌ OPENAI ERROR FULL:", err);
+    res.status(500).json({
+      error: "OpenAI image generation failed",
+      message: err.message,
+      stack: err.stack,
+    });
   }
 });
 
