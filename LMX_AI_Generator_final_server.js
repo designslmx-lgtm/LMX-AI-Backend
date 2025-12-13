@@ -1,7 +1,7 @@
 // ==========================================================
-// LMX Studio — AI Image Designer Backend (FINAL FIXED BUILD)
+// LMX Studio — AI Image Designer Backend (FINAL WORKING BUILD)
 // ----------------------------------------------------------
-// • POST /api/generate — OpenAI Image API (correct sizes, auto-retry)
+// • POST /api/generate — OpenAI Image API (updated for SDK v4)
 // • POST /api/submit   — Sends generated image + form via Resend
 // ----------------------------------------------------------
 // All secrets stored in environment variables.
@@ -36,9 +36,9 @@ app.use(
 );
 
 // ===== API CLIENTS =====
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
-const resend = new Resend(process.env.RESEND_API_KEY || "");
-const SUBMIT_TO = process.env.SUBMIT_TO || "lmxcustomize@gmail.com";
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const resend = new Resend(process.env.RESEND_API_KEY);
+const SUBMIT_TO = process.env.SUBMIT_TO || "designslmx@gmail.com";
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) => {
@@ -46,43 +46,35 @@ app.get("/", (req, res) => {
 });
 
 // ==========================================================
-// ===== IMAGE GENERATION (CORRECTED SIZE + AUTO-RETRY) =====
+// ===== IMAGE GENERATION (UPDATED FOR NEW OPENAI SDK) ======
 // ==========================================================
 app.post("/api/generate", async (req, res) => {
   try {
     const prompt = (req.body?.prompt || "").trim();
     if (!prompt)
-      return res.status(400).json({ error: "Missing prompt for generation." });
+      return res.status(400).json({ error: "Missing prompt." });
 
-    console.log("🧠 Generating image for prompt:", prompt);
+    console.log("🧠 Generating image:", prompt);
 
-    // --- Always use valid sizes supported by OpenAI ---
-    // Supported: "1024x1024", "2048x2048", "auto"
-    let size = "1024x1024";
     let result;
 
+    // FIRST ATTEMPT — Standard 1024x1024
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 25000);
-
-      result = await openai.images.generate(
-        {
-          model: "gpt-image-1",
-          prompt,
-          size,
-          quality: "high",
-        },
-        { signal: controller.signal }
-      );
-
-      clearTimeout(timeout);
+      result = await openai.images.generate({
+        model: "gpt-image-1",
+        prompt: prompt,
+        size: "1024x1024",
+        response_format: "b64_json",
+        quality: "high",
+      });
     } catch (err) {
-      console.warn("⚠️ First attempt failed. Retrying with size=auto…");
+      console.warn("⚠️ First attempt failed → retrying w/ auto size");
 
       result = await openai.images.generate({
         model: "gpt-image-1",
-        prompt,
+        prompt: prompt,
         size: "auto",
+        response_format: "b64_json",
         quality: "high",
       });
     }
@@ -90,7 +82,7 @@ app.post("/api/generate", async (req, res) => {
     const b64 = result?.data?.[0]?.b64_json;
     if (!b64) return res.status(500).json({ error: "No image returned." });
 
-    console.log("✅ Image generated successfully.");
+    console.log("✅ Image generated successfully");
     res.json({ base64: `data:image/png;base64,${b64}` });
   } catch (err) {
     console.error("❌ GENERATE_ERR:", err);
@@ -99,7 +91,7 @@ app.post("/api/generate", async (req, res) => {
 });
 
 // ==========================================================
-// ===== ORDER SUBMISSION (UNCHANGED) =======================
+// ===== ORDER SUBMISSION (UNCHANGED — STILL WORKING) =======
 // ==========================================================
 app.post("/api/submit", upload.single("upload"), async (req, res) => {
   try {
@@ -137,7 +129,7 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
       });
     }
 
-    // ---- Email contents ----
+    // ---- Email HTML ----
     const html = `
       <h2>🧩 New LMX AI Designer Submission</h2>
       <p><b>Name:</b> ${f.name || "N/A"}</p>
@@ -161,12 +153,12 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error("❌ SUBMIT_ERR:", err);
-    res.status(500).json({ error: "Submit failed. Please retry." });
+    res.status(500).json({ error: "Submit failed." });
   }
 });
 
-// ===== START SERVER =====
+// ===== SERVER START =====
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () =>
-  console.log(`✅ LMX Backend running on port ${PORT}`)
-);
+app.listen(PORT, () => {
+  console.log(`✅ LMX Backend running on port ${PORT}`);
+});
