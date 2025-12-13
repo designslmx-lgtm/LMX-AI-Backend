@@ -46,7 +46,7 @@ app.get("/", (req, res) => {
 });
 
 // ==========================================================
-// ===== IMAGE GENERATION (UPDATED FOR NEW OPENAI SDK) ======
+// ===== IMAGE GENERATION (FIXED — INVALID PARAM REMOVED) ====
 // ==========================================================
 app.post("/api/generate", async (req, res) => {
   try {
@@ -64,7 +64,6 @@ app.post("/api/generate", async (req, res) => {
         model: "gpt-image-1",
         prompt: prompt,
         size: "1024x1024",
-        response_format: "b64_json",
         quality: "high",
       });
     } catch (err) {
@@ -74,7 +73,6 @@ app.post("/api/generate", async (req, res) => {
         model: "gpt-image-1",
         prompt: prompt,
         size: "auto",
-        response_format: "b64_json",
         quality: "high",
       });
     }
