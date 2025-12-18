@@ -1,5 +1,5 @@
 // ==========================================================
-// LMX Studio — AI Image Designer Backend (FIXED & CLEAN)
+// LMX Studio — AI Image Designer Backend (FIXED + RATIO READY)
 // ==========================================================
 
 import express from "express";
@@ -39,30 +39,50 @@ app.get("/", (req, res) => {
 });
 
 // ==========================================================
-// IMAGE GENERATION — ZERO INVALID PARAMS
+// RATIO MAP — ENTERPRISE SAFE MAPPING
+// ==========================================================
+// OpenAI currently supports only these sizes.
+const RATIO_MAP = {
+  "1:1": "1024x1024",
+  "4:5": "1024x1280",
+  "2:3": "1024x1536",
+  "3:2": "1536x1024",
+  "16:9": "1536x864",
+  "9:16": "864x1536",
+};
+
+// ==========================================================
+// IMAGE GENERATION (SAFE, CLEAN, WITH RATIO)
 // ==========================================================
 app.post("/api/generate", async (req, res) => {
   try {
     const prompt = (req.body?.prompt || "").trim();
+    const ratio = (req.body?.ratio || "1:1").trim();
+
     if (!prompt) {
       return res.status(400).json({ error: "Missing prompt" });
     }
 
     console.log("🧠 Prompt:", prompt);
+    console.log("📐 Ratio:", ratio);
 
+    // Pick safe size — fall back automatically
+    const size = RATIO_MAP[ratio] || "1024x1024";
+
+    console.log("📏 Final Size:", size);
+
+    // Call OpenAI with dynamic size
     const result = await openai.images.generate({
       model: "gpt-image-1",
-      prompt: prompt,
-      size: "1024x1024",
+      prompt,
+      size,
     });
 
     const b64 = result?.data?.[0]?.b64_json;
-    if (!b64) {
-      throw new Error("No image returned from OpenAI");
-    }
+    if (!b64) throw new Error("No image returned from OpenAI");
 
     res.json({
-      base64: b64
+      base64: b64,
     });
 
   } catch (err) {
