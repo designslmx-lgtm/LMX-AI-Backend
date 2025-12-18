@@ -1,5 +1,6 @@
 // ==========================================================
-// LMX Studio — AI Image Designer Backend (FIXED + RATIO READY)
+// LMX Studio — AI Image Designer Backend
+// (GENERATION + RATIO + UPSCALE)
 // ==========================================================
 
 import express from "express";
@@ -39,9 +40,8 @@ app.get("/", (req, res) => {
 });
 
 // ==========================================================
-// RATIO MAP — ENTERPRISE SAFE MAPPING
+// RATIO MAP — SAFE MAPPINGS
 // ==========================================================
-// OpenAI currently supports only these sizes.
 const RATIO_MAP = {
   "1:1": "1024x1024",
   "4:5": "1024x1280",
@@ -52,7 +52,7 @@ const RATIO_MAP = {
 };
 
 // ==========================================================
-// IMAGE GENERATION (SAFE, CLEAN, WITH RATIO)
+// IMAGE GENERATION — WITH RATIO
 // ==========================================================
 app.post("/api/generate", async (req, res) => {
   try {
@@ -63,15 +63,8 @@ app.post("/api/generate", async (req, res) => {
       return res.status(400).json({ error: "Missing prompt" });
     }
 
-    console.log("🧠 Prompt:", prompt);
-    console.log("📐 Ratio:", ratio);
-
-    // Pick safe size — fall back automatically
     const size = RATIO_MAP[ratio] || "1024x1024";
 
-    console.log("📏 Final Size:", size);
-
-    // Call OpenAI with dynamic size
     const result = await openai.images.generate({
       model: "gpt-image-1",
       prompt,
@@ -79,12 +72,9 @@ app.post("/api/generate", async (req, res) => {
     });
 
     const b64 = result?.data?.[0]?.b64_json;
-    if (!b64) throw new Error("No image returned from OpenAI");
+    if (!b64) throw new Error("No image returned");
 
-    res.json({
-      base64: b64,
-    });
-
+    res.json({ base64: b64 });
   } catch (err) {
     console.error("❌ IMAGE ERROR:", err);
     res.status(500).json({
@@ -95,7 +85,43 @@ app.post("/api/generate", async (req, res) => {
 });
 
 // ==========================================================
-// SUBMISSION (UNCHANGED)
+// UPSCALE API — HIGH-QUALITY ENHANCE ROUTE
+// ==========================================================
+// FRONTEND will POST { image: "data:image/png;base64,..." }
+app.post("/api/upscale", async (req, res) => {
+  try {
+    const img = req.body?.image;
+    if (!img || !img.startsWith("data:image/")) {
+      return res.status(400).json({ error: "Missing or invalid image" });
+    }
+
+    // Remove prefix so OpenAI can accept raw base64
+    const base64 = img.split(",")[1];
+
+    console.log("🔼 Upscaling…");
+
+    const result = await openai.images.edit({
+      model: "gpt-image-1",
+      image: base64,
+      size: "2048x2048", // high-res upscale
+    });
+
+    const b64 = result?.data?.[0]?.b64_json;
+    if (!b64) throw new Error("No image returned during upscale");
+
+    res.json({ base64: b64 });
+
+  } catch (err) {
+    console.error("❌ UPSCALE ERROR:", err);
+    res.status(500).json({
+      error: "Upscale failed",
+      details: err?.message || String(err),
+    });
+  }
+});
+
+// ==========================================================
+// SUBMISSION — UNCHANGED
 // ==========================================================
 app.post("/api/submit", upload.single("upload"), async (req, res) => {
   try {
