@@ -1,6 +1,8 @@
-// LMX Studio — AI Image Designer Backend
-// (GENERATION + RATIO + UPSCALE)
-// ==========================================================
+/*
+   LMX Studio — AI Image Designer Backend
+   (GENERATION + RATIO + UPSCALE)
+   ==========================================================
+*/
 
 import express from "express";
 import cors from "cors";
@@ -39,43 +41,19 @@ app.get("/", (req, res) => {
 });
 
 // ==========================================================
-// UNIVERSAL RATIO PARSER — FIXED
+// RATIO MAP — SAFE MAPPINGS
 // ==========================================================
-//
-// This converts ANY ratio string (e.g., “16:9”, “21:9”, “9:21”) 
-// into a legal pixel size for OpenAI.
-// No more failures. No more bad image fallback.
-//
-function ratioToSize(ratio) {
-  if (!ratio || typeof ratio !== "string") return "1024x1024";
-
-  const [w, h] = ratio.split(":").map(n => parseFloat(n.trim()));
-
-  if (!w || !h) return "1024x1024";
-
-  // Use 1024 on the smallest dimension, scale the other
-  const BASE = 1024;
-  let width, height;
-
-  if (w >= h) {
-    // landscape
-    width = Math.round((w / h) * BASE);
-    height = BASE;
-  } else {
-    // portrait
-    width = BASE;
-    height = Math.round((h / w) * BASE);
-  }
-
-  // Cap extremely wide/tall values to keep OpenAI happy
-  width = Math.min(width, 2048);
-  height = Math.min(height, 2048);
-
-  return `${width}x${height}`;
-}
+const RATIO_MAP = {
+  "1:1": "1024x1024",
+  "4:5": "1024x1280",
+  "2:3": "1024x1536",
+  "3:2": "1536x1024",
+  "16:9": "1536x864",
+  "9:16": "864x1536",
+};
 
 // ==========================================================
-// IMAGE GENERATION — NOW FIXED FOR ANY RATIO
+// IMAGE GENERATION — WITH RATIO + DEBUG LOGS
 // ==========================================================
 app.post("/api/generate", async (req, res) => {
   try {
@@ -86,10 +64,13 @@ app.post("/api/generate", async (req, res) => {
       return res.status(400).json({ error: "Missing prompt" });
     }
 
-    // ⭐ THE FIX: convert ANY ratio into a valid OpenAI size
-    const size = ratioToSize(ratio);
-    console.log("⚡ Using size:", size, "from ratio:", ratio);
+    // DEBUG LOGS — THIS IS THE FIX
+    console.log("⚡ Incoming ratio from frontend:", ratio);
+    const size = RATIO_MAP[ratio] || "1024x1024";
+    console.log("⚡ Size mapped from ratio:", size);
+    console.log("⚡ Full request payload:", req.body);
 
+    // SEND TO OPENAI
     const result = await openai.images.generate({
       model: "gpt-image-1",
       prompt,
@@ -100,7 +81,6 @@ app.post("/api/generate", async (req, res) => {
     if (!b64) throw new Error("No image returned");
 
     res.json({ base64: b64 });
-
   } catch (err) {
     console.error("❌ IMAGE ERROR:", err);
     res.status(500).json({
@@ -121,7 +101,6 @@ app.post("/api/upscale", async (req, res) => {
     }
 
     const base64 = img.split(",")[1];
-
     console.log("🔼 Upscaling…");
 
     const result = await openai.images.edit({
@@ -134,7 +113,6 @@ app.post("/api/upscale", async (req, res) => {
     if (!b64) throw new Error("No image returned during upscale");
 
     res.json({ base64: b64 });
-
   } catch (err) {
     console.error("❌ UPSCALE ERROR:", err);
     res.status(500).json({
@@ -177,7 +155,6 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
     });
 
     res.json({ ok: true });
-
   } catch (err) {
     console.error("❌ SUBMIT ERROR:", err);
     res.status(500).json({ error: "Submit failed" });
@@ -188,4 +165,4 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`✅ LMX Backend running on port ${PORT}`);
-});;
+});
