@@ -1,6 +1,6 @@
 /*
    LMX Studio — AI Image Designer Backend
-   (GENERATION + RATIO + UPSCALE)
+   (FINAL RATIO-SAFE VERSION FOR GPT-IMAGE-1)
    ==========================================================
 */
 
@@ -40,54 +40,62 @@ app.get("/", (req, res) => {
   res.send("✅ LMX AI Backend is live.");
 });
 
-// ==========================================================
-// RATIO MAP — FINAL VERIFIED GPT-IMAGE-1 SAFE SIZES
-// ==========================================================
-//
-// ALL dimensions must be divisible by 64.
-// The ONLY invalid one you had was 1792x1024 (OpenAI rejects it).
-//
+/* ==========================================================
+   FINAL RATIO MAP (ONLY GPT-IMAGE-1 SAFE SIZES)
+   ==========================================================
 
-const RATIO_MAP = {
+   GPT-IMAGE-1 accepts ONLY:
+
+      1024x1024  (square)
+      1024x1536  (tall)
+      1536x1024  (wide)
+
+   ALL ratios MUST map into one of these three.
+   ========================================================== */
+
+const RATIO_CANONICAL = {
+  // square
   "1:1":  "1024x1024",
 
-  "4:5":  "1024x1280",
+  // portrait → tall
+  "4:5":  "1024x1536",
   "2:3":  "1024x1536",
+  "9:16": "1024x1536",
 
+  // landscape → wide
   "3:2":  "1536x1024",
-
-  // ⭐ FIXED 16:9 (MUST USE THIS)
-  "16:9": "1536x896",
-
-  "9:16": "1024x1792",
+  "16:9": "1536x1024",
 };
 
 // ==========================================================
-// IMAGE GENERATION — WITH RATIO + DEBUG LOGS
+// IMAGE GENERATION (FINAL VERSION, NO INVALID SIZES EVER)
 // ==========================================================
 app.post("/api/generate", async (req, res) => {
   try {
     const prompt = (req.body?.prompt || "").trim();
-    const ratio = (req.body?.ratio || "1:1").trim();
+    const ratio  = (req.body?.ratio  || "1:1").trim();
 
     if (!prompt) {
       return res.status(400).json({ error: "Missing prompt" });
     }
 
+    // select canonical safe size
+    const size = RATIO_CANONICAL[ratio] || "1024x1024";
+
     console.log("⚡ Incoming ratio:", ratio);
-    const size = RATIO_MAP[ratio] || "1024x1024";
-    console.log("⚡ Using size:", size);
+    console.log("⚡ Canonical size:", size);
 
     const result = await openai.images.generate({
       model: "gpt-image-1",
       prompt,
-      size,
+      size: size,         // ALWAYS valid now
     });
 
     const b64 = result?.data?.[0]?.b64_json;
     if (!b64) throw new Error("No image returned");
 
     res.json({ base64: b64 });
+
   } catch (err) {
     console.error("❌ IMAGE ERROR:", err);
     res.status(500).json({
@@ -98,7 +106,7 @@ app.post("/api/generate", async (req, res) => {
 });
 
 // ==========================================================
-// UPSCALE API — HIGH-QUALITY ENHANCE ROUTE
+// UPSCALE — SAFE 2048x2048 (ALLOWED SIZE)
 // ==========================================================
 app.post("/api/upscale", async (req, res) => {
   try {
@@ -120,6 +128,7 @@ app.post("/api/upscale", async (req, res) => {
     if (!b64) throw new Error("No image returned during upscale");
 
     res.json({ base64: b64 });
+
   } catch (err) {
     console.error("❌ UPSCALE ERROR:", err);
     res.status(500).json({
@@ -162,6 +171,7 @@ app.post("/api/submit", upload.single("upload"), async (req, res) => {
     });
 
     res.json({ ok: true });
+
   } catch (err) {
     console.error("❌ SUBMIT ERROR:", err);
     res.status(500).json({ error: "Submit failed" });
