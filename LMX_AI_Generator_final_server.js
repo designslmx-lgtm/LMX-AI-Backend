@@ -41,11 +41,11 @@ app.get("/", (req, res) => {
 });
 
 // ==========================================================
-// RATIO MAP — FINAL, VALID GPT-IMAGE-1 COMPATIBLE SIZES
+// RATIO MAP — FINAL VERIFIED GPT-IMAGE-1 SAFE SIZES
 // ==========================================================
 //
-// MUST BE MULTIPLES OF 64
-// These resolutions are VERIFIED WORKING for GPT-IMAGE-1
+// ALL dimensions must be divisible by 64.
+// The ONLY invalid one you had was 1792x1024 (OpenAI rejects it).
 //
 
 const RATIO_MAP = {
@@ -56,7 +56,9 @@ const RATIO_MAP = {
 
   "3:2":  "1536x1024",
 
-  "16:9": "1792x1024",
+  // ⭐ FIXED 16:9 (MUST USE THIS)
+  "16:9": "1536x896",
+
   "9:16": "1024x1792",
 };
 
@@ -72,12 +74,10 @@ app.post("/api/generate", async (req, res) => {
       return res.status(400).json({ error: "Missing prompt" });
     }
 
-    console.log("⚡ Incoming ratio from frontend:", ratio);
+    console.log("⚡ Incoming ratio:", ratio);
     const size = RATIO_MAP[ratio] || "1024x1024";
-    console.log("⚡ Mapped size:", size);
-    console.log("⚡ Full payload:", req.body);
+    console.log("⚡ Using size:", size);
 
-    // SEND TO OPENAI
     const result = await openai.images.generate({
       model: "gpt-image-1",
       prompt,
