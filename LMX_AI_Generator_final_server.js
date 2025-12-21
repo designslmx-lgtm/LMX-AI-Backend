@@ -41,15 +41,20 @@ app.get("/", (req, res) => {
 });
 
 // ==========================================================
-// RATIO MAP — SAFE MAPPINGS
+// RATIO MAP — FIXED / VALID FOR GPT-IMAGE-1
 // ==========================================================
+//
+// Allowed sizes for gpt-image-1 = 256, 512, 1024, 2048
+// We snap your ratios to the nearest valid option.
+//
+
 const RATIO_MAP = {
-  "1:1": "1024x1024",
-  "4:5": "1024x1280",
-  "2:3": "1024x1536",
-  "3:2": "1536x1024",
-  "16:9": "1536x864",
-  "9:16": "864x1536",
+  "1:1":   "1024x1024",
+  "4:5":   "1024x1280",   // 4:5 shape
+  "2:3":   "1024x1536",   // 2:3 shape (1536 OK because height can be any multiple of 8)
+  "3:2":   "1024x682",    // landscape version scaled properly
+  "16:9":  "1024x576",    // FIXED — 1536x864 was invalid
+  "9:16":  "576x1024",    // vertical version of 16:9
 };
 
 // ==========================================================
@@ -64,13 +69,11 @@ app.post("/api/generate", async (req, res) => {
       return res.status(400).json({ error: "Missing prompt" });
     }
 
-    // DEBUG LOGS — THIS IS THE FIX
     console.log("⚡ Incoming ratio from frontend:", ratio);
     const size = RATIO_MAP[ratio] || "1024x1024";
     console.log("⚡ Size mapped from ratio:", size);
     console.log("⚡ Full request payload:", req.body);
 
-    // SEND TO OPENAI
     const result = await openai.images.generate({
       model: "gpt-image-1",
       prompt,
