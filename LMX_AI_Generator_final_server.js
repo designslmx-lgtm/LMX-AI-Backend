@@ -18,12 +18,14 @@ const upload = multer({ limits: { fileSize: 25 * 1024 * 1024 } });
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// ===== CORS =====
+// ===== CORS (UPDATED BY DIRECT DOMAIN SWAP ONLY) =====
 app.use(
   cors({
     origin: process.env.ALLOWED_ORIGIN?.split(",") || [
-      "https://lmxstudio.com",
-      "https://www.lmxstudio.com",
+      "https://lmxsyntheticai.com",
+      "https://www.lmxsyntheticai.com",
+      "https://lmxsyntheticai.com/designer",
+      "https://www.lmxsyntheticai.com/designer",
     ],
     methods: ["POST", "GET", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
