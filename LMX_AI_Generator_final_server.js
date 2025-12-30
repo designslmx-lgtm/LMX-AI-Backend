@@ -24,8 +24,6 @@ app.use(
     origin: process.env.ALLOWED_ORIGIN?.split(",") || [
       "https://lmxsyntheticai.com",
       "https://www.lmxsyntheticai.com",
-      "https://lmxsyntheticai.com/designer",
-      "https://www.lmxsyntheticai.com/designer",
     ],
     methods: ["POST", "GET", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
