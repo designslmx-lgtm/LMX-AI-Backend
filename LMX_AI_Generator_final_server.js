@@ -1,371 +1,150 @@
-/*
-   LMX Studio — AI Image Designer Backend
-   (FINAL RATIO-SAFE VERSION FOR GPT-IMAGE-1)
-   ==========================================================
-*/
+// LMX SYNTHETIC DESIGNER — BACKEND (RAILWAY)
+// Replace your existing backend file with this (or merge routes if you already have an app)
 
-import express from "express";
-import cors from "cors";
-import multer from "multer";
-import fetch from "node-fetch";
-import { Resend } from "resend";
-import OpenAI from "openai";
+const express = require("express");
+const cors = require("cors");
+const OpenAI = require("openai");
 
-// ===== INIT =====
-const app = express();
-const upload = multer({ limits: { fileSize: 25 * 1024 * 1024 } });
-
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
-
-// ===== CORS (UPDATED BY DIRECT DOMAIN SWAP ONLY) =====
-app.use(
-  cors({
-    origin: process.env.ALLOWED_ORIGIN?.split(",") || [
-      "https://lmxsyntheticai.com",
-      "https://www.lmxsyntheticai.com",
-    ],
-    methods: ["POST", "GET", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
-  })
-);
-
-// ===== CLIENTS =====
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const resend = new Resend(process.env.RESEND_API_KEY);
-const SUBMIT_TO = process.env.SUBMIT_TO || "designslmx@gmail.com";
-
-// ===== HEALTH =====
-app.get("/", (req, res) => {
-  res.send("✅ LMX AI Backend is live.");
+// 1) OPENAI CLIENT
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
-/* ==========================================================
-   FINAL RATIO MAP (ONLY GPT-IMAGE-1 SAFE SIZES)
-   ==========================================================
+if (!process.env.OPENAI_API_KEY) {
+  console.warn("⚠️  OPENAI_API_KEY is not set. The generator will fail until you add it.");
+}
 
-   GPT-IMAGE-1 accepts ONLY:
+// 2) BASIC APP SETUP
+const app = express();
 
-      1024x1024  (square)
-      1024x1536  (tall)
-      1536x1024  (wide)
+app.use(cors({
+  origin: "*",          // lock this down later if you want
+  methods: ["POST", "OPTIONS"],
+}));
+app.use(express.json({ limit: "10mb" }));
 
-   ALL ratios MUST map into one of these three.
-   ========================================================== */
+// Optional: simple health check
+app.get("/", (req, res) => {
+  res.json({ ok: true, service: "LMX Synthetic Designer", status: "online" });
+});
 
-const RATIO_CANONICAL = {
-  // square
-  "1:1":  "1024x1024",
+// 3) RATIO → SIZE MAPPING
+// Frontend can send any of these ratios; we squeeze them into the closest OpenAI size.
+function mapRatioToSize(ratio) {
+  // OpenAI gpt-image-1 (as of now) supports: 1024x1024, 1024x1792, 1792x1024
+  // We group ratios into "square", "tall", "wide".
+  const r = (ratio || "").trim();
 
-  // portrait → tall
-  "4:5":  "1024x1536",
-  "2:3":  "1024x1536",
-  "9:16": "1024x1536",
+  // Tall-ish → vertical
+  const tallSet = new Set(["4:5", "2:3", "9:16"]);
+  // Wide-ish → horizontal
+  const wideSet = new Set(["3:2", "16:9"]);
 
-  // landscape → wide
-  "3:2":  "1536x1024",
-  "16:9": "1536x1024",
-};
+  if (tallSet.has(r)) return "1024x1792";
+  if (wideSet.has(r)) return "1792x1024";
+  // Default / 1:1 / anything unknown
+  return "1024x1024";
+}
 
-// ==========================================================
-// IMAGE GENERATION (FINAL VERSION, NO INVALID SIZES EVER)
-// ==========================================================
-app.post("/api/generate", async (req, res) => {
+// 4) LIGHT PROMPT SANITY (OPTIONAL FILTERING HOOK)
+// You can expand this later for custom safety rules.
+function looksObviouslyBad(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  const banned = [
+    "csam",
+    "child sexual",
+    "child abuse",
+    "exploitative minor",
+    "revenge porn",
+  ];
+  return banned.some((w) => lower.includes(w));
+}
+
+// 5) MAIN GENERATE ROUTE
+app.post("/lmx1/generate", async (req, res) => {
   try {
-    const prompt = (req.body?.prompt || "").trim();
-    const ratio  = (req.body?.ratio  || "1:1").trim();
+    const {
+      prompt: rawPrompt,
+      style: rawStyle,
+      ratio: rawRatio,
+      model: rawModel,
+    } = req.body || {};
+
+    const prompt = (rawPrompt || "").trim();
+    const style  = (rawStyle || "").trim();
+    const ratio  = (rawRatio || "").trim() || "1:1";
+    const model  = (rawModel || "").trim() || "gpt-image-1";
 
     if (!prompt) {
-      return res.status(400).json({ error: "Missing prompt" });
+      return res.status(400).json({ error: "Missing prompt." });
     }
 
-    // select canonical safe size
-    const size = RATIO_CANONICAL[ratio] || "1024x1024";
+    // Quick text sanity guard (you still have OpenAI safety on top)
+    if (looksObviouslyBad(prompt)) {
+      console.warn("⚠️ Blocked prompt by simple filter.");
+      return res.status(400).json({
+        error: "unsafe_content",
+        message: "Prompt blocked by LMX safety.",
+      });
+    }
 
-    console.log("⚡ Incoming ratio:", ratio);
-    console.log("⚡ Canonical size:", size);
+    const size = mapRatioToSize(ratio);
 
-    const result = await openai.images.generate({
-      model: "gpt-image-1",
+    // Build the LMX-flavored prompt
+    const finalPrompt = [
+      style ? `Style: ${style}.` : "",
+      `LMX Synthetic Designer frame.`,
+      `Ratio hint: ${ratio}.`,
       prompt,
-      size: size,         // ALWAYS valid now
+    ].filter(Boolean).join(" ");
+
+    console.log("🖼  Generating image:", {
+      size,
+      ratio,
+      style: style || "Auto",
+      model,
     });
 
-    const b64 = result?.data?.[0]?.b64_json;
-    if (!b64) throw new Error("No image returned");
+    // 6) CALL OPENAI
+    const response = await client.images.generate({
+      model,
+      prompt: finalPrompt,
+      n: 1,
+      size,
+      response_format: "b64_json",
+    });
 
-    res.json({ base64: b64 });
+    if (!response || !response.data || !response.data[0] || !response.data[0].b64_json) {
+      console.error("❌ OpenAI returned no data:", response);
+      return res.status(500).json({ error: "no_image_data" });
+    }
+
+    const base64 = response.data[0].b64_json;
+
+    // 7) RETURN BASE64 → FRONTEND BUILDS data URL + WATERMARK IF NEEDED
+    return res.json({
+      base64,
+      ratio,
+      size,
+      style: style || "Auto",
+      model,
+    });
 
   } catch (err) {
-    console.error("❌ IMAGE ERROR:", err);
-    res.status(500).json({
-      error: "Image generation failed",
-      details: err?.message || String(err),
+    console.error("🔥 /lmx1/generate error:", err?.response?.data || err);
+
+    const status = err?.status || err?.response?.status || 500;
+
+    return res.status(status).json({
+      error: "server_error",
+      message: err?.message || "Unexpected error in LMX backend.",
     });
   }
 });
 
-// ==========================================================
-// UPSCALE — SAFE 2048x2048 (ALLOWED SIZE)
-// ==========================================================
-app.post("/api/upscale", async (req, res) => {
-  try {
-    const img = req.body?.image;
-    if (!img || !img.startsWith("data:image/")) {
-      return res.status(400).json({ error: "Missing or invalid image" });
-    }
-
-    const base64 = img.split(",")[1];
-    console.log("🔼 Upscaling…");
-
-    const result = await openai.images.edit({
-      model: "gpt-image-1",
-      image: base64,
-      size: "2048x2048",
-    });
-
-    const b64 = result?.data?.[0]?.b64_json;
-    if (!b64) throw new Error("No image returned during upscale");
-
-    res.json({ base64: b64 });
-
-  } catch (err) {
-    console.error("❌ UPSCALE ERROR:", err);
-    res.status(500).json({
-      error: "Upscale failed",
-      details: err?.message || String(err),
-    });
-  }
-});
-
-// ==========================================================
-// SUBMISSION — UNCHANGED
-// ==========================================================
-app.post("/api/submit", upload.single("upload"), async (req, res) => {
-  try {
-    const f = req.body || {};
-    const attachments = [];
-
-    if (f.generatedImage?.startsWith("data:image/")) {
-      attachments.push({
-        filename: "generated.png",
-        content: f.generatedImage.split(",")[1],
-        encoding: "base64",
-      });
-    }
-
-    if (req.file) {
-      attachments.push({
-        filename: req.file.originalname,
-        content: req.file.buffer.toString("base64"),
-        encoding: "base64",
-      });
-    }
-
-    await resend.emails.send({
-      from: "LMX Studio <no-reply@lmxstudio.com>",
-      to: [SUBMIT_TO],
-      subject: "LMX — New AI Designer Submission",
-      html: `<p>New submission received.</p>`,
-      attachments,
-    });
-
-    res.json({ ok: true });
-
-  } catch (err) {
-    console.error("❌ SUBMIT ERROR:", err);
-    res.status(500).json({ error: "Submit failed" });
-  }
-});
-
-// ===== START =====
-const PORT = process.env.PORT || 10000;
+// 8) START SERVER (Railway will set PORT)
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`✅ LMX Backend running on port ${PORT}`);
-});
-
-/*
-   LMX Studio — AI Image Designer Backend
-   (FINAL RATIO-SAFE VERSION FOR GPT-IMAGE-1)
-   ==========================================================
-*/
-
-import express from "express";
-import cors from "cors";
-import multer from "multer";
-import fetch from "node-fetch";
-import { Resend } from "resend";
-import OpenAI from "openai";
-
-// ===== INIT =====
-const app = express();
-const upload = multer({ limits: { fileSize: 25 * 1024 * 1024 } });
-
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
-
-// ===== CORS (UPDATED BY DIRECT DOMAIN SWAP ONLY) =====
-app.use(
-  cors({
-    origin: process.env.ALLOWED_ORIGIN?.split(",") || [
-      "https://lmxsyntheticai.com",
-      "https://www.lmxsyntheticai.com",
-    ],
-    methods: ["POST", "GET", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
-  })
-);
-
-// ===== CLIENTS =====
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const resend = new Resend(process.env.RESEND_API_KEY);
-const SUBMIT_TO = process.env.SUBMIT_TO || "designslmx@gmail.com";
-
-// ===== HEALTH =====
-app.get("/", (req, res) => {
-  res.send("✅ LMX AI Backend is live.");
-});
-
-/* ==========================================================
-   FINAL RATIO MAP (ONLY GPT-IMAGE-1 SAFE SIZES)
-   ==========================================================
-
-   GPT-IMAGE-1 accepts ONLY:
-
-      1024x1024  (square)
-      1024x1536  (tall)
-      1536x1024  (wide)
-
-   ALL ratios MUST map into one of these three.
-   ========================================================== */
-
-const RATIO_CANONICAL = {
-  // square
-  "1:1":  "1024x1024",
-
-  // portrait → tall
-  "4:5":  "1024x1536",
-  "2:3":  "1024x1536",
-  "9:16": "1024x1536",
-
-  // landscape → wide
-  "3:2":  "1536x1024",
-  "16:9": "1536x1024",
-};
-
-// ==========================================================
-// IMAGE GENERATION (FINAL VERSION, NO INVALID SIZES EVER)
-// ==========================================================
-app.post("/api/generate", async (req, res) => {
-  try {
-    const prompt = (req.body?.prompt || "").trim();
-    const ratio  = (req.body?.ratio  || "1:1").trim();
-
-    if (!prompt) {
-      return res.status(400).json({ error: "Missing prompt" });
-    }
-
-    // select canonical safe size
-    const size = RATIO_CANONICAL[ratio] || "1024x1024";
-
-    console.log("⚡ Incoming ratio:", ratio);
-    console.log("⚡ Canonical size:", size);
-
-    const result = await openai.images.generate({
-      model: "gpt-image-1",
-      prompt,
-      size: size,         // ALWAYS valid now
-    });
-
-    const b64 = result?.data?.[0]?.b64_json;
-    if (!b64) throw new Error("No image returned");
-
-    res.json({ base64: b64 });
-
-  } catch (err) {
-    console.error("❌ IMAGE ERROR:", err);
-    res.status(500).json({
-      error: "Image generation failed",
-      details: err?.message || String(err),
-    });
-  }
-});
-
-// ==========================================================
-// UPSCALE — SAFE 2048x2048 (ALLOWED SIZE)
-// ==========================================================
-app.post("/api/upscale", async (req, res) => {
-  try {
-    const img = req.body?.image;
-    if (!img || !img.startsWith("data:image/")) {
-      return res.status(400).json({ error: "Missing or invalid image" });
-    }
-
-    const base64 = img.split(",")[1];
-    console.log("🔼 Upscaling…");
-
-    const result = await openai.images.edit({
-      model: "gpt-image-1",
-      image: base64,
-      size: "2048x2048",
-    });
-
-    const b64 = result?.data?.[0]?.b64_json;
-    if (!b64) throw new Error("No image returned during upscale");
-
-    res.json({ base64: b64 });
-
-  } catch (err) {
-    console.error("❌ UPSCALE ERROR:", err);
-    res.status(500).json({
-      error: "Upscale failed",
-      details: err?.message || String(err),
-    });
-  }
-});
-
-// ==========================================================
-// SUBMISSION — UNCHANGED
-// ==========================================================
-app.post("/api/submit", upload.single("upload"), async (req, res) => {
-  try {
-    const f = req.body || {};
-    const attachments = [];
-
-    if (f.generatedImage?.startsWith("data:image/")) {
-      attachments.push({
-        filename: "generated.png",
-        content: f.generatedImage.split(",")[1],
-        encoding: "base64",
-      });
-    }
-
-    if (req.file) {
-      attachments.push({
-        filename: req.file.originalname,
-        content: req.file.buffer.toString("base64"),
-        encoding: "base64",
-      });
-    }
-
-    await resend.emails.send({
-      from: "LMX Studio <no-reply@lmxstudio.com>",
-      to: [SUBMIT_TO],
-      subject: "LMX — New AI Designer Submission",
-      html: `<p>New submission received.</p>`,
-      attachments,
-    });
-
-    res.json({ ok: true });
-
-  } catch (err) {
-    console.error("❌ SUBMIT ERROR:", err);
-    res.status(500).json({ error: "Submit failed" });
-  }
-});
-
-// ===== START =====
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`✅ LMX Backend running on port ${PORT}`);
+  console.log(`🚀 LMX Synthetic Designer backend running on port ${PORT}`);
 });
