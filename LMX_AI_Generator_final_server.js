@@ -112,7 +112,7 @@ app.post("/lmx1/generate", async (req, res) => {
       prompt: finalPrompt,
       n: 1,
       size,
-      response_format: "b64_json",
+
     });
 
     if (!response || !response.data || !response.data[0] || !response.data[0].b64_json) {
