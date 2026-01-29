@@ -17,15 +17,10 @@ if (!process.env.OPENAI_API_KEY) {
 // 2) BASIC APP SETUP
 const app = express();
 
-// Keep your existing CORS setup
 app.use(cors({
   origin: "*",          // lock this down later if you want
   methods: ["POST", "OPTIONS"],
 }));
-
-// ✅ ADD THIS: explicit preflight handler (does NOT affect POST logic)
-app.options("/lmx1/generate", cors());
-
 app.use(express.json({ limit: "10mb" }));
 
 // Optional: simple health check
