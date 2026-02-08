@@ -93,7 +93,7 @@ function getUserContext(req) {
       req.body?.userId ||
       "").toString().trim() || null;
 
-  // Read plan / tier from request (frontend is already wired)
+  // Read plan / tier from request if frontend sends it
   const rawPlan =
     (req.headers["x-lmx-plan"] ||
       req.headers["x-user-plan"] ||
@@ -101,7 +101,6 @@ function getUserContext(req) {
       req.body?.tier ||
       "").toString().trim();
 
-  // Simple normalization so logs look clean
   let plan = rawPlan.toLowerCase();
   if (!plan) {
     plan = "free"; // default if nothing is sent
@@ -115,20 +114,63 @@ function getUserContext(req) {
 }
 
 // Credit or plan check before generation
-async function checkCredits(userCtx) {
-  // Launch safe default:
-  // Always allow. No one is blocked.
-  //
-  // Later you replace this body with:
-  //  1) Supabase lookup (current credits or plan)
-  //  2) Decrement on success
-  //  3) Return { ok: false, code: "no_credits", message: "..." } when blocked
+// NOW reads credits from the request (headers/body):
+// - x-lmx-credits / x-user-credits headers
+// - req.body.credits / req.body.creditsRemaining
+// If no credits number is provided, treats as unlimited (always allow).
+async function checkCredits(userCtx, req) {
+  try {
+    const rawCredits =
+      req.headers["x-lmx-credits"] ??
+      req.headers["x-user-credits"] ??
+      (req.body ? req.body.credits ?? req.body.creditsRemaining : null);
 
-  return {
-    ok: true,
-    code: "allow_all",
-    message: "Credits check stub. Everything allowed.",
-  };
+    // If nothing sent, do NOT block anything yet (unlimited mode)
+    if (rawCredits === null || rawCredits === undefined) {
+      return {
+        ok: true,
+        code: "no_limit_configured",
+        message: "No credits value provided; treating as unlimited for now.",
+      };
+    }
+
+    const creditsNumber = Number(rawCredits);
+
+    // If not a valid number, also allow (to avoid accidental lockouts)
+    if (Number.isNaN(creditsNumber)) {
+      return {
+        ok: true,
+        code: "invalid_credits_value",
+        message: "Credits value not a valid number; allowing request.",
+      };
+    }
+
+    // If user still has credits > 0 → allow
+    if (creditsNumber > 0) {
+      return {
+        ok: true,
+        code: "has_credits",
+        message: "User has remaining credits.",
+        remaining: creditsNumber,
+      };
+    }
+
+    // creditsNumber <= 0 → block
+    return {
+      ok: false,
+      code: "no_credits",
+      message: "You are out of credits.",
+      remaining: 0,
+    };
+  } catch (err) {
+    console.error("❌ checkCredits error:", err);
+    // Fail-open: if something goes wrong, don't hard-block generation
+    return {
+      ok: true,
+      code: "credits_check_error",
+      message: "Credits check failed; allowing request to avoid lockout.",
+    };
+  }
 }
 
 // Log generation event for analytics and Library
@@ -210,12 +252,13 @@ app.post("/lmx1/generate", async (req, res) => {
     }
 
     // Credits or plan check
-    const creditCheck = await checkCredits(userCtx);
+    const creditCheck = await checkCredits(userCtx, req);
     if (!creditCheck.ok) {
       console.warn("⛔ Credits check blocked generation", {
         requestId,
         userId: userCtx.userId || "guest",
         reason: creditCheck.code,
+        remaining: creditCheck.remaining ?? null,
       });
 
       // 402 Payment Required is perfect for "upgrade" or "buy tokens"
@@ -223,6 +266,7 @@ app.post("/lmx1/generate", async (req, res) => {
         error: "no_credits",
         message: creditCheck.message || "You are out of credits.",
         code: creditCheck.code || "no_credits",
+        remaining: creditCheck.remaining ?? 0,
       });
     }
 
