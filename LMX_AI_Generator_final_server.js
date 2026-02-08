@@ -82,10 +82,10 @@ function looksObviouslyBad(text) {
 
 /* ============  USER CONTEXT AND CREDITS HOOKS  ============ */
 /* These are safe stubs. They do not break your current flow.
-   You can swap internals for Supabase and Stripe later without
+   You can swap internals for Supabase later without
    touching the generate route logic again.                         */
 
-// Pulls a user id from headers or body if available
+// Pulls a user id + plan/tier from headers or body if available
 function getUserContext(req) {
   const userId =
     (req.headers["x-lmx-user-id"] ||
@@ -93,11 +93,24 @@ function getUserContext(req) {
       req.body?.userId ||
       "").toString().trim() || null;
 
-  // You can expand this with roles and plan from Supabase later
+  // Read plan / tier from request (frontend is already wired)
+  const rawPlan =
+    (req.headers["x-lmx-plan"] ||
+      req.headers["x-user-plan"] ||
+      req.body?.plan ||
+      req.body?.tier ||
+      "").toString().trim();
+
+  // Simple normalization so logs look clean
+  let plan = rawPlan.toLowerCase();
+  if (!plan) {
+    plan = "free"; // default if nothing is sent
+  }
+
   return {
     userId,           // string or null
     isGuest: !userId, // true when no id present
-    plan: "free",     // placeholder until you wire plans
+    plan,             // comes from frontend or defaults to "free"
   };
 }
 
@@ -228,6 +241,7 @@ app.post("/lmx1/generate", async (req, res) => {
     console.log("🖼  Generating image", {
       requestId,
       userId: userCtx.userId || "guest",
+      plan: userCtx.plan,
       size,
       ratio,
       style: style || "Auto",
