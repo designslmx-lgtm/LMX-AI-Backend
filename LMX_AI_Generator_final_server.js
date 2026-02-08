@@ -1,6 +1,6 @@
 // LMX SYNTHETIC DESIGNER — BACKEND (UNIFIED ENGINE)
 // Safe upgrade from your Railway backend. Same behavior, with added hooks
-// for user context, credits, and logging.
+// for user context, credits, logging, styles, and magic prompt.
 
 /* =================  CORE IMPORTS  ================= */
 
@@ -137,7 +137,7 @@ function getUserContext(req) {
 }
 
 // Credit or plan check before generation
-// NOW reads credits from the request (headers/body):
+// Reads credits from the request (headers/body):
 // - x-lmx-credits / x-user-credits headers
 // - req.body.credits / req.body.creditsRemaining
 // If no credits number is provided, treats as unlimited (always allow).
@@ -215,11 +215,13 @@ async function logGeneration(userCtx, meta) {
         user_id: userCtx.userId,
         plan: userCtx.plan,
         prompt: meta.prompt,
+        magic_prompt: meta.magicPrompt,
         style: meta.style,
         ratio: meta.ratio,
         size: meta.size,
         model: meta.model,
         request_id: meta.requestId,
+        image_url: meta.imageUrl,
         created_at: new Date().toISOString(),
       });
 
@@ -307,8 +309,8 @@ app.post("/lmx1/generate", async (req, res) => {
 
     const size = mapRatioToSize(ratio);
 
-    // Build the LMX flavored prompt
-    const finalPrompt = [
+    // Build the LMX flavored "magic" prompt
+    const magicPrompt = [
       resolvedStyle ? `Style: ${resolvedStyle}.` : "",
       "LMX Synthetic Designer frame.",
       `Ratio hint: ${ratio}.`,
@@ -331,7 +333,7 @@ app.post("/lmx1/generate", async (req, res) => {
     // Call OpenAI
     const response = await client.images.generate({
       model,
-      prompt: finalPrompt,
+      prompt: magicPrompt,
       n: 1,
       size,
     });
@@ -348,19 +350,26 @@ app.post("/lmx1/generate", async (req, res) => {
 
     const base64 = response.data[0].b64_json;
 
+    // Build a shareable data URL (never expires, can be used in <img src="...">)
+    const imageUrl = `data:image/png;base64,${base64}`;
+
     // Log generation (for analytics and Library)
     await logGeneration(userCtx, {
       requestId,
       prompt,
+      magicPrompt,
       style: resolvedStyle || "Auto",
       ratio,
       size,
       model,
+      imageUrl,
     });
 
-    // Return base64 to frontend. Your existing frontend dataURL logic still works.
+    // Return base64 + magicPrompt + imageUrl to frontend
     return res.json({
       base64,
+      imageUrl,              // shareable link string
+      magicPrompt,           // full professional prompt used to generate
       ratio,
       size,
       style: resolvedStyle || "Auto",
