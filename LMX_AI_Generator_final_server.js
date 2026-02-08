@@ -1,6 +1,7 @@
 // LMX SYNTHETIC DESIGNER — BACKEND (UNIFIED ENGINE)
 // Safe upgrade from your Railway backend. Same behavior, with added hooks
-// for user context, credits, logging, styles, and magic prompt.
+// for user context, credits, logging, styles, magic prompt, share links,
+// captions/hashtags, and stronger safety / ban checks.
 
 /* =================  CORE IMPORTS  ================= */
 
@@ -22,6 +23,9 @@ const client = new OpenAI({
 if (!process.env.OPENAI_API_KEY) {
   console.warn("⚠️  OPENAI_API_KEY is not set. The generator will fail until you add it.");
 }
+
+// Text model for captions / hashtags (does NOT touch your image model)
+const TEXT_MODEL = process.env.LMX_TEXT_MODEL || "gpt-4o-mini";
 
 /* =================  APP SETUP  ================= */
 
@@ -65,7 +69,7 @@ function mapRatioToSize(ratio) {
   return "1024x1024";
 }
 
-/* ============  SIMPLE SAFETY HOOK  ============ */
+/* ============  BASIC SAFETY HOOK  ============ */
 
 function looksObviouslyBad(text) {
   if (!text) return false;
@@ -78,6 +82,90 @@ function looksObviouslyBad(text) {
     "revenge porn",
   ];
   return banned.some((w) => lower.includes(w));
+}
+
+/* ============  STRONGER CONTENT FILTER  ============ */
+
+// Returns { ok: boolean, code?: string, message?: string }
+function runContentFilter(prompt) {
+  if (!prompt) {
+    return { ok: true };
+  }
+  const lower = prompt.toLowerCase();
+
+  // Hard-block categories you do NOT want on your platform.
+  const hardRules = [
+    {
+      code: "minor_sexual_content",
+      words: [
+        "child sexual",
+        "underage sex",
+        "teen sex",
+        "teen porn",
+        "14 year old",
+        "15 year old",
+        "16 year old",
+        "minor nude",
+        "minor pornography",
+      ],
+    },
+    {
+      code: "exploitative_content",
+      words: [
+        "csam",
+        "child abuse material",
+        "non-consensual intimate",
+        "hidden camera in shower",
+        "voyeur porn",
+      ],
+    },
+    {
+      code: "sexual_violence",
+      words: [
+        "rape",
+        "sexual assault",
+        "forced sex",
+        "non-consensual sex",
+      ],
+    },
+    {
+      code: "bestiality",
+      words: [
+        "sex with animal",
+        "bestiality",
+        "zoophilia",
+      ],
+    },
+    {
+      code: "revenge_porn",
+      words: [
+        "revenge porn",
+        "leak my ex nudes",
+        "post my ex nude",
+      ],
+    },
+  ];
+
+  for (const rule of hardRules) {
+    if (rule.words.some((w) => lower.includes(w))) {
+      return {
+        ok: false,
+        code: rule.code,
+        message: "Prompt blocked by LMX safety rules.",
+      };
+    }
+  }
+
+  // Keep the old simple hook as a fallback
+  if (looksObviouslyBad(prompt)) {
+    return {
+      ok: false,
+      code: "unsafe_keyword",
+      message: "Prompt blocked by LMX safety rules.",
+    };
+  }
+
+  return { ok: true };
 }
 
 /* ============  STYLE MAP (PRESETS)  ============ */
@@ -104,9 +192,6 @@ const STYLE_MAP = {
 };
 
 /* ============  USER CONTEXT AND CREDITS HOOKS  ============ */
-/* These are safe stubs. They do not break your current flow.
-   You can swap internals for Supabase later without
-   touching the generate route logic again.                         */
 
 // Pulls a user id + plan/tier from headers or body if available
 function getUserContext(req) {
@@ -134,6 +219,56 @@ function getUserContext(req) {
     isGuest: !userId, // true when no id present
     plan,             // comes from frontend or defaults to "free"
   };
+}
+
+// Get client IP (best effort behind proxies)
+function getClientIp(req) {
+  const xf = req.headers["x-forwarded-for"];
+  if (typeof xf === "string" && xf.length > 0) {
+    return xf.split(",")[0].trim();
+  }
+  const ip = req.socket?.remoteAddress || null;
+  return ip;
+}
+
+// Ban check: uses env lists
+// LMX_BANNED_USER_IDS = "user1,user2"
+// LMX_BANNED_IPS = "1.2.3.4,5.6.7.8"
+function checkBan(userCtx, req) {
+  const bannedUsersEnv = process.env.LMX_BANNED_USER_IDS || "";
+  const bannedIpsEnv = process.env.LMX_BANNED_IPS || "";
+
+  const bannedUserIds = bannedUsersEnv
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const bannedIps = bannedIpsEnv
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const clientIp = getClientIp(req);
+
+  if (userCtx.userId && bannedUserIds.includes(userCtx.userId)) {
+    return {
+      banned: true,
+      reason: "user_id_banned",
+      detail: `User ${userCtx.userId} is banned.`,
+      ip: clientIp || null,
+    };
+  }
+
+  if (clientIp && bannedIps.includes(clientIp)) {
+    return {
+      banned: true,
+      reason: "ip_banned",
+      detail: `IP ${clientIp} is banned.`,
+      ip: clientIp,
+    };
+  }
+
+  return { banned: false };
 }
 
 // Credit or plan check before generation
@@ -216,6 +351,8 @@ async function logGeneration(userCtx, meta) {
         plan: userCtx.plan,
         prompt: meta.prompt,
         magic_prompt: meta.magicPrompt,
+        caption: meta.caption,
+        hashtags: meta.hashtags,
         style: meta.style,
         ratio: meta.ratio,
         size: meta.size,
@@ -244,11 +381,96 @@ function makeRequestId() {
   );
 }
 
+/* ============  CAPTION + HASHTAGS HELPER  ============ */
+
+// Builds a social-friendly caption + hashtags for each frame.
+// Never throws; if anything fails, it just returns empty strings.
+async function buildCaptionAndTags({ prompt, magicPrompt }) {
+  try {
+    const basePrompt = magicPrompt || prompt || "";
+    if (!basePrompt) {
+      return { caption: "", hashtags: "" };
+    }
+
+    const completion = await client.chat.completions.create({
+      model: TEXT_MODEL,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are LMX Synthetic's caption engine. " +
+            "Given a short description of an AI image, you return a JSON object with a punchy caption and 8–12 relevant hashtags. " +
+            "Keep the caption under 120 characters, no emojis. Hashtags should be lower_case or camelCase, no spaces, each starting with '#'.",
+        },
+        {
+          role: "user",
+          content:
+            `Image description: ${basePrompt}\n\n` +
+            "Respond ONLY as valid JSON with this shape:\n" +
+            `{"caption": "...", "hashtags": ["#tag1", "#tag2"]}`,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 180,
+    });
+
+    const raw = completion.choices?.[0]?.message?.content?.trim() || "";
+
+    let caption = "";
+    let hashtags = "";
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        caption =
+          typeof parsed.caption === "string" ? parsed.caption.trim() : "";
+        if (Array.isArray(parsed.hashtags)) {
+          hashtags = parsed.hashtags
+            .filter((h) => typeof h === "string" && h.trim().length > 0)
+            .join(" ");
+        }
+      }
+    } catch (e) {
+      // If parsing fails, just fall back to raw text as caption
+      caption = raw;
+      hashtags = "";
+    }
+
+    return {
+      caption: caption || "",
+      hashtags: hashtags || "",
+    };
+  } catch (err) {
+    console.error("❌ buildCaptionAndTags error:", err);
+    return { caption: "", hashtags: "" };
+  }
+}
+
 /* ============  MAIN GENERATE ROUTE  ============ */
 
 app.post("/lmx1/generate", async (req, res) => {
   const requestId = makeRequestId();
   const userCtx = getUserContext(req);
+  const clientIp = getClientIp(req);
+
+  // 1) Ban check
+  const banResult = checkBan(userCtx, req);
+  if (banResult.banned) {
+    console.warn("⛔ Blocked banned user/ip", {
+      requestId,
+      userId: userCtx.userId || "guest",
+      plan: userCtx.plan,
+      ip: banResult.ip || clientIp || null,
+      reason: banResult.reason,
+    });
+
+    return res.status(403).json({
+      error: "banned",
+      message: "Your account or IP is blocked from using this service.",
+      code: banResult.reason,
+      requestId,
+    });
+  }
 
   try {
     const {
@@ -279,16 +501,26 @@ app.post("/lmx1/generate", async (req, res) => {
       return res.status(400).json({ error: "Missing prompt." });
     }
 
-    // Quick text sanity guard (you still have OpenAI safety on top)
-    if (looksObviouslyBad(prompt)) {
-      console.warn("⚠️ Blocked prompt by simple filter.", { requestId });
+    // 2) Content safety filter (stronger)
+    const safety = runContentFilter(prompt);
+    if (!safety.ok) {
+      console.warn("⚠️ Blocked prompt by LMX safety rules.", {
+        requestId,
+        userId: userCtx.userId || "guest",
+        plan: userCtx.plan,
+        ip: clientIp || null,
+        code: safety.code,
+      });
+
       return res.status(400).json({
         error: "unsafe_content",
-        message: "Prompt blocked by LMX safety.",
+        message: safety.message || "Prompt blocked by LMX safety rules.",
+        code: safety.code || "unsafe_content",
+        requestId,
       });
     }
 
-    // Credits or plan check
+    // 3) Credits or plan check
     const creditCheck = await checkCredits(userCtx, req);
     if (!creditCheck.ok) {
       console.warn("⛔ Credits check blocked generation", {
@@ -304,6 +536,7 @@ app.post("/lmx1/generate", async (req, res) => {
         message: creditCheck.message || "You are out of credits.",
         code: creditCheck.code || "no_credits",
         remaining: creditCheck.remaining ?? 0,
+        requestId,
       });
     }
 
@@ -323,6 +556,7 @@ app.post("/lmx1/generate", async (req, res) => {
       requestId,
       userId: userCtx.userId || "guest",
       plan: userCtx.plan,
+      ip: clientIp || null,
       size,
       ratio,
       styleKey: styleKey || null,
@@ -330,7 +564,7 @@ app.post("/lmx1/generate", async (req, res) => {
       model,
     });
 
-    // Call OpenAI
+    // 4) Call OpenAI image model
     const response = await client.images.generate({
       model,
       prompt: magicPrompt,
@@ -345,7 +579,7 @@ app.post("/lmx1/generate", async (req, res) => {
       !response.data[0].b64_json
     ) {
       console.error("❌ OpenAI returned no data:", { requestId, response });
-      return res.status(500).json({ error: "no_image_data" });
+      return res.status(500).json({ error: "no_image_data", requestId });
     }
 
     const base64 = response.data[0].b64_json;
@@ -353,23 +587,34 @@ app.post("/lmx1/generate", async (req, res) => {
     // Build a shareable data URL (never expires, can be used in <img src="...">)
     const imageUrl = `data:image/png;base64,${base64}`;
 
-    // Log generation (for analytics and Library)
+    // 5) Build caption + hashtags (non-blocking helper)
+    const { caption, hashtags } = await buildCaptionAndTags({
+      prompt,
+      magicPrompt,
+    });
+
+    // 6) Log generation (for analytics and Library)
     await logGeneration(userCtx, {
       requestId,
       prompt,
       magicPrompt,
+      caption,
+      hashtags,
       style: resolvedStyle || "Auto",
       ratio,
       size,
       model,
       imageUrl,
+      ip: clientIp || null,
     });
 
-    // Return base64 + magicPrompt + imageUrl to frontend
+    // 7) Return everything to frontend
     return res.json({
       base64,
       imageUrl,              // shareable link string
       magicPrompt,           // full professional prompt used to generate
+      caption,               // short caption for social
+      hashtags,              // string of hashtags "#one #two ..."
       ratio,
       size,
       style: resolvedStyle || "Auto",
