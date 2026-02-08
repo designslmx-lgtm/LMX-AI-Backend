@@ -80,6 +80,29 @@ function looksObviouslyBad(text) {
   return banned.some((w) => lower.includes(w));
 }
 
+/* ============  STYLE MAP (PRESETS)  ============ */
+
+// Simple keys your UI can send in `style`
+// Example: style: "anime", "cinematic", "realistic", etc.
+const STYLE_MAP = {
+  anime:
+    "highly detailed anime illustration, cel-shaded, bold clean line art, expressive faces, vibrant colors, Japanese anime style",
+  cinematic:
+    "ultra realistic cinematic film still, dramatic lighting, volumetric light, shallow depth of field, 35mm lens, film-grade color grading",
+  realistic:
+    "photorealistic ultra detailed image, natural lighting, real-world textures, subtle imperfections, 8k resolution look",
+  comic:
+    "comic book illustration, bold black inks, halftone shading, dynamic poses, graphic novel panel style",
+  watercolor:
+    "soft watercolor painting, textured paper, flowing pigment edges, gentle gradients, hand-painted illustration",
+  "3d":
+    "high-end 3D render, physically-based materials, realistic reflections and shadows, studio lighting, CG artwork",
+  pixel:
+    "retro pixel art, low resolution sprite style, limited color palette, 16-bit video game look",
+  sketch:
+    "hand-drawn pencil sketch, loose linework, visible graphite texture, minimal shading, concept art style",
+};
+
 /* ============  USER CONTEXT AND CREDITS HOOKS  ============ */
 /* These are safe stubs. They do not break your current flow.
    You can swap internals for Supabase later without
@@ -228,15 +251,27 @@ app.post("/lmx1/generate", async (req, res) => {
   try {
     const {
       prompt: rawPrompt,
-      style: rawStyle,
+      style: rawStyle,   // style from UI (e.g. "anime", "cinematic", etc.)
       ratio: rawRatio,
       model: rawModel,
     } = req.body || {};
 
     const prompt = (rawPrompt || "").trim();
-    const style = (rawStyle || "").trim();
     const ratio = (rawRatio || "").trim() || "1:1";
     const model = (rawModel || "").trim() || "gpt-image-1";
+
+    // ===== RESOLVE STYLE =====
+    let styleKeyRaw = (rawStyle || "").toString().trim();
+    let styleKey = styleKeyRaw.toLowerCase();
+    let resolvedStyle = "";
+
+    if (styleKey && STYLE_MAP[styleKey]) {
+      // Use strong preset when it matches a key (anime / cinematic / realistic / etc.)
+      resolvedStyle = STYLE_MAP[styleKey];
+    } else if (styleKeyRaw) {
+      // If it's not a known key, just use whatever text the UI sent
+      resolvedStyle = styleKeyRaw;
+    }
 
     if (!prompt) {
       return res.status(400).json({ error: "Missing prompt." });
@@ -274,7 +309,7 @@ app.post("/lmx1/generate", async (req, res) => {
 
     // Build the LMX flavored prompt
     const finalPrompt = [
-      style ? `Style: ${style}.` : "",
+      resolvedStyle ? `Style: ${resolvedStyle}.` : "",
       "LMX Synthetic Designer frame.",
       `Ratio hint: ${ratio}.`,
       prompt,
@@ -288,7 +323,8 @@ app.post("/lmx1/generate", async (req, res) => {
       plan: userCtx.plan,
       size,
       ratio,
-      style: style || "Auto",
+      styleKey: styleKey || null,
+      resolvedStyle: resolvedStyle || null,
       model,
     });
 
@@ -316,7 +352,7 @@ app.post("/lmx1/generate", async (req, res) => {
     await logGeneration(userCtx, {
       requestId,
       prompt,
-      style: style || "Auto",
+      style: resolvedStyle || "Auto",
       ratio,
       size,
       model,
@@ -327,7 +363,7 @@ app.post("/lmx1/generate", async (req, res) => {
       base64,
       ratio,
       size,
-      style: style || "Auto",
+      style: resolvedStyle || "Auto",
       model,
       requestId,
       userId: userCtx.userId || null,
