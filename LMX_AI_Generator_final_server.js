@@ -639,6 +639,586 @@ app.post("/lmx1/generate", async (req, res) => {
   }
 });
 
+/* ============  REMIX ROUTE (LMX SYNTHETIC PROMPT)  ============ */
+
+app.post("/lmx1/remix", async (req, res) => {
+  const requestId = makeRequestId();
+  const userCtx = getUserContext(req);
+  const clientIp = getClientIp(req);
+
+  // Gate remix to paid tiers if you want
+  const allowedPlans = ["creator", "pro", "studio"];
+  if (!allowedPlans.includes(userCtx.plan)) {
+    return res.status(403).json({
+      error: "plan_not_allowed",
+      message: "Remix is only available on Creator and above.",
+      requestId,
+    });
+  }
+
+  const banResult = checkBan(userCtx, req);
+  if (banResult.banned) {
+    console.warn("⛔ Blocked banned user/ip (remix)", {
+      requestId,
+      userId: userCtx.userId || "guest",
+      plan: userCtx.plan,
+      ip: banResult.ip || clientIp || null,
+      reason: banResult.reason,
+    });
+
+    return res.status(403).json({
+      error: "banned",
+      message: "Your account or IP is blocked from using this service.",
+      code: banResult.reason,
+      requestId,
+    });
+  }
+
+  try {
+    const {
+      remixPrompt: rawRemixPrompt,
+      basePrompt: rawBasePrompt,   // original frame description / original prompt
+      style: rawStyle,
+      ratio: rawRatio,
+      model: rawModel,
+    } = req.body || {};
+
+    const remixPrompt = (rawRemixPrompt || "").trim();
+    const basePrompt = (rawBasePrompt || "").trim();
+    const ratio = (rawRatio || "").trim() || "1:1";
+    const model = (rawModel || "").trim() || "gpt-image-1";
+
+    if (!remixPrompt) {
+      return res.status(400).json({ error: "Missing remixPrompt.", requestId });
+    }
+
+    // Safety on combined text
+    const combinedForSafety = [basePrompt, remixPrompt].filter(Boolean).join(" ");
+    const safety = runContentFilter(combinedForSafety);
+    if (!safety.ok) {
+      console.warn("⚠️ Blocked remix prompt by LMX safety rules.", {
+        requestId,
+        userId: userCtx.userId || "guest",
+        plan: userCtx.plan,
+        ip: clientIp || null,
+        code: safety.code,
+      });
+
+      return res.status(400).json({
+        error: "unsafe_content",
+        message: safety.message || "Prompt blocked by LMX safety rules.",
+        code: safety.code || "unsafe_content",
+        requestId,
+      });
+    }
+
+    const creditCheck = await checkCredits(userCtx, req);
+    if (!creditCheck.ok) {
+      console.warn("⛔ Credits check blocked remix", {
+        requestId,
+        userId: userCtx.userId || "guest",
+        reason: creditCheck.code,
+        remaining: creditCheck.remaining ?? null,
+      });
+
+      return res.status(402).json({
+        error: "no_credits",
+        message: creditCheck.message || "You are out of credits.",
+        code: creditCheck.code || "no_credits",
+        remaining: creditCheck.remaining ?? 0,
+        requestId,
+      });
+    }
+
+    // Style / ratio
+    let styleKeyRaw = (rawStyle || "").toString().trim();
+    let styleKey = styleKeyRaw.toLowerCase();
+    let resolvedStyle = "";
+    if (styleKey && STYLE_MAP[styleKey]) {
+      resolvedStyle = STYLE_MAP[styleKey];
+    } else if (styleKeyRaw) {
+      resolvedStyle = styleKeyRaw;
+    }
+
+    const size = mapRatioToSize(ratio);
+
+    const magicPromptParts = [
+      "LMX Synthetic Designer remix frame.",
+      basePrompt
+        ? `Original frame description: ${basePrompt}.`
+        : "Original frame already exists in the user's library.",
+      resolvedStyle ? `Style: ${resolvedStyle}.` : "",
+      `Ratio hint: ${ratio}.`,
+      `Transform the existing image according to this instruction: ${remixPrompt}.`,
+    ];
+
+    const magicPrompt = magicPromptParts.filter(Boolean).join(" ");
+
+    console.log("🎛  Remixing image", {
+      requestId,
+      userId: userCtx.userId || "guest",
+      plan: userCtx.plan,
+      ip: clientIp || null,
+      size,
+      ratio,
+      styleKey: styleKey || null,
+      resolvedStyle: resolvedStyle || null,
+      model,
+    });
+
+    const response = await client.images.generate({
+      model,
+      prompt: magicPrompt,
+      n: 1,
+      size,
+    });
+
+    if (
+      !response ||
+      !response.data ||
+      !response.data[0] ||
+      !response.data[0].b64_json
+    ) {
+      console.error("❌ Remix: OpenAI returned no data:", { requestId, response });
+      return res.status(500).json({ error: "no_image_data", requestId });
+    }
+
+    const base64 = response.data[0].b64_json;
+    const imageUrl = `data:image/png;base64,${base64}`;
+
+    const { caption, hashtags } = await buildCaptionAndTags({
+      prompt: remixPrompt,
+      magicPrompt,
+    });
+
+    await logGeneration(userCtx, {
+      requestId,
+      prompt: remixPrompt,
+      basePrompt,
+      magicPrompt,
+      caption,
+      hashtags,
+      style: resolvedStyle || "Auto",
+      ratio,
+      size,
+      model,
+      imageUrl,
+      ip: clientIp || null,
+      isRemix: true,
+    });
+
+    return res.json({
+      base64,
+      imageUrl,
+      magicPrompt,
+      caption,
+      hashtags,
+      ratio,
+      size,
+      style: resolvedStyle || "Auto",
+      model,
+      requestId,
+      userId: userCtx.userId || null,
+      plan: userCtx.plan,
+      isRemix: true,
+    });
+  } catch (err) {
+    console.error("🔥 /lmx1/remix error:", {
+      requestId,
+      error: err?.response?.data || err,
+    });
+
+    const status = err?.status || err?.response?.status || 500;
+
+    return res.status(status).json({
+      error: "server_error",
+      message: err?.message || "Unexpected error in LMX remix backend.",
+      requestId,
+    });
+  }
+});
+
+/* ============  UPSCALE ROUTE  ============ */
+
+app.post("/lmx1/upscale", async (req, res) => {
+  const requestId = makeRequestId();
+  const userCtx = getUserContext(req);
+  const clientIp = getClientIp(req);
+
+  const banResult = checkBan(userCtx, req);
+  if (banResult.banned) {
+    console.warn("⛔ Blocked banned user/ip (upscale)", {
+      requestId,
+      userId: userCtx.userId || "guest",
+      plan: userCtx.plan,
+      ip: banResult.ip || clientIp || null,
+      reason: banResult.reason,
+    });
+
+    return res.status(403).json({
+      error: "banned",
+      message: "Your account or IP is blocked from using this service.",
+      code: banResult.reason,
+      requestId,
+    });
+  }
+
+  try {
+    const {
+      basePrompt: rawBasePrompt,      // description of current frame
+      upscalePrompt: rawUpscalePrompt, // optional extra instruction
+      style: rawStyle,
+      ratio: rawRatio,
+      model: rawModel,
+    } = req.body || {};
+
+    const basePrompt = (rawBasePrompt || "").trim();
+    const ratio = (rawRatio || "").trim() || "1:1";
+    const model = (rawModel || "").trim() || "gpt-image-1";
+
+    const upscaleInstruction =
+      (rawUpscalePrompt || "").trim() ||
+      "Recreate this frame as a sharper, more detailed, high-resolution version while preserving composition and subject.";
+
+    if (!basePrompt) {
+      return res.status(400).json({ error: "Missing basePrompt for upscale.", requestId });
+    }
+
+    const combinedForSafety = [basePrompt, upscaleInstruction].join(" ");
+    const safety = runContentFilter(combinedForSafety);
+    if (!safety.ok) {
+      console.warn("⚠️ Blocked upscale prompt by LMX safety rules.", {
+        requestId,
+        userId: userCtx.userId || "guest",
+        plan: userCtx.plan,
+        ip: clientIp || null,
+        code: safety.code,
+      });
+
+      return res.status(400).json({
+        error: "unsafe_content",
+        message: safety.message || "Prompt blocked by LMX safety rules.",
+        code: safety.code || "unsafe_content",
+        requestId,
+      });
+    }
+
+    const creditCheck = await checkCredits(userCtx, req);
+    if (!creditCheck.ok) {
+      console.warn("⛔ Credits check blocked upscale", {
+        requestId,
+        userId: userCtx.userId || "guest",
+        reason: creditCheck.code,
+        remaining: creditCheck.remaining ?? null,
+      });
+
+      return res.status(402).json({
+        error: "no_credits",
+        message: creditCheck.message || "You are out of credits.",
+        code: creditCheck.code || "no_credits",
+        remaining: creditCheck.remaining ?? 0,
+        requestId,
+      });
+    }
+
+    let styleKeyRaw = (rawStyle || "").toString().trim();
+    let styleKey = styleKeyRaw.toLowerCase();
+    let resolvedStyle = "";
+    if (styleKey && STYLE_MAP[styleKey]) {
+      resolvedStyle = STYLE_MAP[styleKey];
+    } else if (styleKeyRaw) {
+      resolvedStyle = styleKeyRaw;
+    }
+
+    const size = mapRatioToSize(ratio);
+
+    const magicPrompt = [
+      "LMX Synthetic Designer upscale pass.",
+      `Original frame description: ${basePrompt}.`,
+      resolvedStyle ? `Style: ${resolvedStyle}.` : "",
+      `Ratio hint: ${ratio}.`,
+      upscaleInstruction,
+      "Emphasize clean edges, fine details, high clarity, and subtle textures.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    console.log("🔍  Upscaling image", {
+      requestId,
+      userId: userCtx.userId || "guest",
+      plan: userCtx.plan,
+      ip: clientIp || null,
+      size,
+      ratio,
+      styleKey: styleKey || null,
+      resolvedStyle: resolvedStyle || null,
+      model,
+    });
+
+    const response = await client.images.generate({
+      model,
+      prompt: magicPrompt,
+      n: 1,
+      size,
+    });
+
+    if (
+      !response ||
+      !response.data ||
+      !response.data[0] ||
+      !response.data[0].b64_json
+    ) {
+      console.error("❌ Upscale: OpenAI returned no data:", { requestId, response });
+      return res.status(500).json({ error: "no_image_data", requestId });
+    }
+
+    const base64 = response.data[0].b64_json;
+    const imageUrl = `data:image/png;base64,${base64}`;
+
+    const { caption, hashtags } = await buildCaptionAndTags({
+      prompt: upscaleInstruction,
+      magicPrompt,
+    });
+
+    await logGeneration(userCtx, {
+      requestId,
+      prompt: upscaleInstruction,
+      basePrompt,
+      magicPrompt,
+      caption,
+      hashtags,
+      style: resolvedStyle || "Auto",
+      ratio,
+      size,
+      model,
+      imageUrl,
+      ip: clientIp || null,
+      isUpscale: true,
+    });
+
+    return res.json({
+      base64,
+      imageUrl,
+      magicPrompt,
+      caption,
+      hashtags,
+      ratio,
+      size,
+      style: resolvedStyle || "Auto",
+      model,
+      requestId,
+      userId: userCtx.userId || null,
+      plan: userCtx.plan,
+      isUpscale: true,
+    });
+  } catch (err) {
+    console.error("🔥 /lmx1/upscale error:", {
+      requestId,
+      error: err?.response?.data || err,
+    });
+
+    const status = err?.status || err?.response?.status || 500;
+
+    return res.status(status).json({
+      error: "server_error",
+      message: err?.message || "Unexpected error in LMX upscale backend.",
+      requestId,
+    });
+  }
+});
+
+/* ============  BACKGROUND REMOVAL ROUTE  ============ */
+
+app.post("/lmx1/remove-background", async (req, res) => {
+  const requestId = makeRequestId();
+  const userCtx = getUserContext(req);
+  const clientIp = getClientIp(req);
+
+  const banResult = checkBan(userCtx, req);
+  if (banResult.banned) {
+    console.warn("⛔ Blocked banned user/ip (remove-background)", {
+      requestId,
+      userId: userCtx.userId || "guest",
+      plan: userCtx.plan,
+      ip: banResult.ip || clientIp || null,
+      reason: banResult.reason,
+    });
+
+    return res.status(403).json({
+      error: "banned",
+      message: "Your account or IP is blocked from using this service.",
+      code: banResult.reason,
+      requestId,
+    });
+  }
+
+  try {
+    const {
+      basePrompt: rawBasePrompt,        // description of current frame
+      bgInstruction: rawBgInstruction,  // optional, e.g. "pure white background"
+      style: rawStyle,
+      ratio: rawRatio,
+      model: rawModel,
+    } = req.body || {};
+
+    const basePrompt = (rawBasePrompt || "").trim();
+    const ratio = (rawRatio || "").trim() || "1:1";
+    const model = (rawModel || "").trim() || "gpt-image-1";
+
+    const bgInstruction =
+      (rawBgInstruction || "").trim() ||
+      "Remove the original background and place the main subject on a clean, simple background suitable for product or profile use.";
+
+    if (!basePrompt) {
+      return res.status(400).json({ error: "Missing basePrompt for background removal.", requestId });
+    }
+
+    const combinedForSafety = [basePrompt, bgInstruction].join(" ");
+    const safety = runContentFilter(combinedForSafety);
+    if (!safety.ok) {
+      console.warn("⚠️ Blocked remove-background prompt by LMX safety rules.", {
+        requestId,
+        userId: userCtx.userId || "guest",
+        plan: userCtx.plan,
+        ip: clientIp || null,
+        code: safety.code,
+      });
+
+      return res.status(400).json({
+        error: "unsafe_content",
+        message: safety.message || "Prompt blocked by LMX safety rules.",
+        code: safety.code || "unsafe_content",
+        requestId,
+      });
+    }
+
+    const creditCheck = await checkCredits(userCtx, req);
+    if (!creditCheck.ok) {
+      console.warn("⛔ Credits check blocked remove-background", {
+        requestId,
+        userId: userCtx.userId || "guest",
+        reason: creditCheck.code,
+        remaining: creditCheck.remaining ?? null,
+      });
+
+      return res.status(402).json({
+        error: "no_credits",
+        message: creditCheck.message || "You are out of credits.",
+        code: creditCheck.code || "no_credits",
+        remaining: creditCheck.remaining ?? 0,
+        requestId,
+      });
+    }
+
+    let styleKeyRaw = (rawStyle || "").toString().trim();
+    let styleKey = styleKeyRaw.toLowerCase();
+    let resolvedStyle = "";
+    if (styleKey && STYLE_MAP[styleKey]) {
+      resolvedStyle = STYLE_MAP[styleKey];
+    } else if (styleKeyRaw) {
+      resolvedStyle = styleKeyRaw;
+    }
+
+    const size = mapRatioToSize(ratio);
+
+    const magicPrompt = [
+      "LMX Synthetic Designer background cleanup pass.",
+      `Original frame description: ${basePrompt}.`,
+      resolvedStyle ? `Style: ${resolvedStyle}.` : "",
+      `Ratio hint: ${ratio}.`,
+      bgInstruction,
+      "Preserve the main subject cleanly and avoid halos or artifacts around the edges.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    console.log("🧼  Removing background", {
+      requestId,
+      userId: userCtx.userId || "guest",
+      plan: userCtx.plan,
+      ip: clientIp || null,
+      size,
+      ratio,
+      styleKey: styleKey || null,
+      resolvedStyle: resolvedStyle || null,
+      model,
+    });
+
+    const response = await client.images.generate({
+      model,
+      prompt: magicPrompt,
+      n: 1,
+      size,
+    });
+
+    if (
+      !response ||
+      !response.data ||
+      !response.data[0] ||
+      !response.data[0].b64_json
+    ) {
+      console.error("❌ Remove-background: OpenAI returned no data:", {
+        requestId,
+        response,
+      });
+      return res.status(500).json({ error: "no_image_data", requestId });
+    }
+
+    const base64 = response.data[0].b64_json;
+    const imageUrl = `data:image/png;base64,${base64}`;
+
+    const { caption, hashtags } = await buildCaptionAndTags({
+      prompt: bgInstruction,
+      magicPrompt,
+    });
+
+    await logGeneration(userCtx, {
+      requestId,
+      prompt: bgInstruction,
+      basePrompt,
+      magicPrompt,
+      caption,
+      hashtags,
+      style: resolvedStyle || "Auto",
+      ratio,
+      size,
+      model,
+      imageUrl,
+      ip: clientIp || null,
+      isBackgroundRemoval: true,
+    });
+
+    return res.json({
+      base64,
+      imageUrl,
+      magicPrompt,
+      caption,
+      hashtags,
+      ratio,
+      size,
+      style: resolvedStyle || "Auto",
+      model,
+      requestId,
+      userId: userCtx.userId || null,
+      plan: userCtx.plan,
+      isBackgroundRemoval: true,
+    });
+  } catch (err) {
+    console.error("🔥 /lmx1/remove-background error:", {
+      requestId,
+      error: err?.response?.data || err,
+    });
+
+    const status = err?.status || err?.response?.status || 500;
+
+    return res.status(status).json({
+      error: "server_error",
+      message: err?.message || "Unexpected error in LMX background removal backend.",
+      requestId,
+    });
+  }
+});
+
 /* ============  START SERVER  ============ */
 
 const PORT = process.env.PORT || 3000;
