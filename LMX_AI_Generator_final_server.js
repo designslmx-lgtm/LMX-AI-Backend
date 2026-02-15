@@ -9,8 +9,8 @@ const express = require("express");
 const cors = require("cors");
 const OpenAI = require("openai");
 // Optional future wiring for billing and DB:
-// const Stripe = require("stripe");
-// const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const Stripe = require("stripe");
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 // const { createClient } = require("@supabase/supabase-js");
 // const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
@@ -36,6 +36,38 @@ app.use(
     origin: "*", // you can lock to your domain later
     methods: ["POST", "OPTIONS", "GET"],
   })
+);
+
+// ===== STRIPE WEBHOOK ROUTE (RAW BODY) =====
+// Must be BEFORE app.use(express.json(...))
+app.post(
+  "/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  (req, res) => {
+    const sig = req.headers["stripe-signature"];
+
+    let event;
+
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
+    } catch (err) {
+      console.error("Stripe signature verification failed:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    console.log("Stripe event received:", event.type);
+
+    // You will expand this switch later to handle:
+    // - checkout.session.completed
+    // - customer.subscription.created / updated / deleted
+    // - invoice.paid / invoice.payment_failed
+    // For now, just acknowledge receipt.
+    return res.json({ received: true });
+  }
 );
 
 // JSON body for normal routes
